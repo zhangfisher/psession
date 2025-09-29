@@ -1,0 +1,29 @@
+{
+	"name": "psession",
+	"module": "index.ts",
+	"version": "0.0.1",
+	"type": "module",
+	"main": "dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"default": "./dist/index.js",
+			"require": "./dist/index.cjs",
+			"import": "./dist/index.js"
+		}
+	},
+	"license": "MIT",
+	"scripts": {
+		"build": "tsdown"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.2.4",
+		"@types/bun": "latest",
+		"fastevent": "^2.3.4",
+		"tsdown": "^0.15.5"
+	},
+	"peerDependencies": {
+		"typescript": "^5"
+	}
+}
