@@ -1,5 +1,0 @@
----
-"psession": major
----
-
-init release
