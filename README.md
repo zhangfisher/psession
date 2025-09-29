@@ -320,40 +320,6 @@ manager.on("session:create", (session) => {
 3. 实现基本的命令处理逻辑
 4. 管理会话生命周期和资源清理
 
-```typescript
-// 创建会话管理器
-const manager = new SessionManager({
-    sender: (message) => {
-        /* 发送逻辑 */
-    },
-});
-
-// 创建不同的端口
-const deviceAPort = manager.createPort("deviceA", {
-    sessionTimeout: 3000, // 可以为每个端口设置不同的超时时间
-    maxSessionCount: 100, // 可以限制每个端口的最大会话数
-});
-
-const deviceBPort = manager.createPort("deviceB", {
-    sessionTimeout: 5000,
-});
-
-// 在特定端口上创建会话
-const sessionA = manager.createSession("deviceA");
-const sessionB = manager.createSession("deviceB");
-
-// 处理来自特定端口的消息
-function onMessage(message) {
-    if (manager.isSession(message)) {
-        // 根据消息来源获取对应端口的会话
-        const session = manager.getSession(message, message.from);
-        if (session) {
-            session.next(message);
-        }
-    }
-}
-```
-
 ## 错误处理
 
 PSession 提供了几种错误类型来帮助处理不同的异常情况：
