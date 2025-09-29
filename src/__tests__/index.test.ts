@@ -88,13 +88,6 @@ describe("Session", () => {
 	});
 	test("创建会话并发送等待响应", () => {
 		return new Promise<void>((resolve) => {
-			// sender.send({ type: "request", value: 1 }).then((response) => {
-			// 	expect(response.type).toBe("response");
-			// 	expect(response.value).toBe(2);
-			// 	// expect(session.pending).toBe(false);
-			// 	expect(sender.sessionManager.ports.get("default")?.sessions.size).toBe(0);
-			// 	resolve();
-			// });
 			const session = sender.sessionManager.createSession()!;
 			session.send({ type: "request", value: 1 }).then((response) => {
 				expect(response.type).toBe("response");
