@@ -17,7 +17,7 @@
 	"scripts": {
 		"build": "tsdown",
 		"changeset": "changeset",
-		"release": "bun run build && changeset release && changeset publish"
+		"release": "bun run build && changeset version && changeset publish"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.2.4",
