@@ -114,7 +114,7 @@ export class SessionManager<Message extends Record<string, any> = Record<string,
 		return portObj.create();
 	}
 	createPort(name: string, options: SessionPortOptions) {
-		const port = new SessionPort(Object.assign(this.options, options, { name }));
+		const port = new SessionPort<Message>(Object.assign(this.options, options, { name }));
 		this.ports.set(name, port);
 		return port;
 	}
@@ -124,6 +124,24 @@ export class SessionManager<Message extends Record<string, any> = Record<string,
 	clear() {
 		this.ports.forEach((port) => {
 			port.clear();
+		});
+	}
+	abort(e?: Error) {
+		this.ports.forEach((port) => {
+			port.abort(e);
+		});
+	}
+	timeout() {
+		this.ports.forEach((port) => {
+			port.timeout();
+		});
+	}
+	/**
+	 * 超时会导致重试，而取消不会
+	 */
+	cancel() {
+		this.ports.forEach((port) => {
+			port.cancel();
 		});
 	}
 }

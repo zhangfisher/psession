@@ -164,6 +164,10 @@ export type SessionOptions = {
 	timeout?: number;
 	retryCount?: number;
 	retryInterval?: number;
+	/**
+	 * 只发送一次，并在得到响应或超时/取消/中止后自动销毁
+	 */
+	once?: boolean;
 };
 
 export class Session<Message extends ISessionMessage> {
@@ -186,6 +190,7 @@ export class Session<Message extends ISessionMessage> {
 				timeout: 0,
 				retryCount: 0,
 				retryInterval: 1000,
+				once: false,
 			},
 			options,
 		);
@@ -196,9 +201,6 @@ export class Session<Message extends ISessionMessage> {
 		this.lastSendTime = Date.now(); // 更新最后发送时间戳
 	}
 
-	private _assertSessionInvalid() {
-		if (this.destroyed) throw new SessionInvalidError();
-	}
 	/**
 	 *
 	 * 发送消息并等待回复
@@ -212,7 +214,7 @@ export class Session<Message extends ISessionMessage> {
 	async send<R = Message>(message: Message, options?: SessionOptions): Promise<R> {
 		// 会话是否有效，如果已经被销毁，则抛出异常
 		// 当会话对象会end后就不再有效，如果需要则需要重新创建会话对象
-		this._assertSessionInvalid();
+		this._assertReady();
 		const retryCount = (options?.retryCount || this.options.retryCount) + 1;
 		if (retryCount > 1) {
 			let result: R;
@@ -228,13 +230,18 @@ export class Session<Message extends ISessionMessage> {
 						return result;
 					} catch (e) {
 						hasError = e;
+						// 如果手动调用取消或中止,则不再重试
+						if (hasError instanceof SessionCancelError || hasError instanceof SessionAbortError) {
+							throw e;
+						}
 					}
 					if (i < retryCount - 1) await delay(retryInterval);
 				}
+				// 所有重试均完成后，
 				if (hasError) {
 					throw hasError;
 				} else {
-					throw new SessionAbortError();
+					throw new SessionTimeoutError();
 				}
 			} finally {
 				this.retrying = false;
@@ -264,6 +271,12 @@ export class Session<Message extends ISessionMessage> {
 			} catch (e: any) {
 				this.abort(e);
 			}
+		}).finally(() => {
+			this.pending = false;
+			// 如果会话是一次性的，则在会话结束后，马上清除会话
+			if (this.options.once) {
+				this.end();
+			}
 		});
 	}
 	/**
@@ -272,21 +285,18 @@ export class Session<Message extends ISessionMessage> {
 	 *
 	 */
 	timeout(): void {
-		this.pending = false;
 		if (this._reject) {
 			this._reject(new SessionTimeoutError());
 		}
 	}
 	cancel() {
-		this.pending = false;
 		if (this._reject) {
 			this._reject(new SessionCancelError());
 		}
 	}
 	abort(e?: Error) {
-		this.pending = false;
 		if (this._reject) {
-			this._reject(e);
+			this._reject(e || new SessionAbortError());
 		}
 	}
 	/**
@@ -295,6 +305,9 @@ export class Session<Message extends ISessionMessage> {
 	 * @returns
 	 */
 	post(message: Message) {
+		if (this.destroyed) {
+			throw new SessionInvalidError();
+		}
 		// @ts-expect-error
 		message[this.manager.options.sessionIdName] = this.id;
 		//每次发送均需要更新时间，否则会话因为超时被清除
@@ -313,7 +326,7 @@ export class Session<Message extends ISessionMessage> {
 	 * @param message
 	 */
 	next(message: Message): void {
-		this.pending = false;
+		this._assertReady();
 		if (this._resolve) {
 			this._resolve(message);
 		}
@@ -324,9 +337,11 @@ export class Session<Message extends ISessionMessage> {
 			this.cancel();
 		}
 		this.destroyed = true;
-		//延时销毁自己
-		setTimeout(() => {
-			this.port.remove(this.id);
-		});
+		this.port.sessions.delete(String(this.id));
+	}
+	private _assertReady() {
+		if (this.destroyed) {
+			throw new SessionInvalidError();
+		}
 	}
 }

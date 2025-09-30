@@ -1,360 +1,159 @@
 # PSession
 
-`PSession`是一个轻量级的会话管理工具，专为需要维护多个会话状态的应用程序设计。它提供了简单而强大的 API，帮助开发者轻松处理`一对一`或`一对多`等场景下的会话通信流程。
+[中文](./README_CN.md)
 
-## 特性
+`PSession` is a lightweight session management tool designed for applications that need to maintain multiple session states. It provides a simple yet powerful API to help developers easily handle session communication flows in `one-to-one` or `one-to-many` scenarios.
 
--   🚀 轻量级设计，易于集成
--   🔄 支持多端口会话管理
--   ⏱️ 内置会话超时管理
--   🔁 支持重试机制
--   🧩 灵活的会话 ID 管理
--   📦 TypeScript 支持，类型安全
+## Features
 
-## 安装
+-   🚀 Lightweight design, easy to integrate
+-   🔄 Support for multi-port session management
+-   ⏱️ Built-in session timeout management
+-   🔁 Support for retry mechanisms
+-   🧩 Flexible session ID management
+-   📦 TypeScript support, type safety
 
-```bash
-npm install psession
-yarn add psession
-pnpm add psession
-bun add psession
-```
+## Installation
 
-## 快速入门 - WebSocket 示例
+````
 
-以下是一个使用 WebSocket 实现的服务器和客户端示例，展示如何使用 PSession 进行会话管理：
+## Guide
 
-### WebSocket 服务器端
+### Session Principles
 
-```typescript
-import { SessionManager } from "psession";
-import { WebSocketServer } from "ws";
+The core of `PSession` is a session management mechanism based on session IDs (`sid`), which tracks and manages multiple concurrent sessions by embedding unique session identifiers in messages.
 
-// 创建WebSocket服务器
-const wss = new WebSocketServer({ port: 8080 });
-console.log("WebSocket服务器已启动，监听端口 8080");
+1. **SID Generation and Assignment**:
 
-// 创建会话管理器
-const manager = new SessionManager({
-    sender: (message) => {
-        // 这个函数不会被直接使用，因为我们会为每个客户端创建独立的端口
-        console.log("默认发送器不应被调用");
-    },
-    sessionTimeout: 10000, // 10秒超时
-});
+    - Each new session is automatically assigned a unique numeric `ID`
+    - `SID` starts from `1` and increments until it reaches the configured maximum session count (default `65535`)
+    - When `SID` is exhausted, the system recycles the earliest session ID according to the configured strategy
 
-// 处理新的WebSocket连接
-wss.on("connection", (ws, req) => {
-    const clientId = req.socket.remoteAddress + ":" + req.socket.remotePort;
-    console.log(`客户端已连接: ${clientId}`);
+2. **Message Marking Mechanism**:
 
-    // 为每个客户端创建一个独立的端口
-    const port = manager.createPort(clientId, {
-        sender: (message) => {
-            // 发送消息到特定客户端
-            if (ws.readyState === ws.OPEN) {
-                ws.send(JSON.stringify(message));
-            }
-        },
-    });
+    - When sending a message, the system automatically adds a session `SID` field to the message object (default field name is `sid`)
+    - The receiver identifies and routes messages to the corresponding session handler by checking the `SID` field in the message
+    - This mechanism allows messages from multiple sessions to be transmitted in the same channel without confusion
 
-    // 处理来自客户端的消息
-    ws.on("message", (data) => {
-        try {
-            const message = JSON.parse(data.toString());
+3. **Session Lifecycle Management**:
+    - Session creation: Create a new session via the `createSession()` method
+    - Session activity: Update the session's last activity time each time a message is sent
+    - Session termination: Actively end the session via the `session.end()` method, or wait for the system to automatically clean up timed-out sessions
 
-            // 判断是否是会话消息
-            if (manager.isSession(message)) {
-                const session = manager.getSession(message, clientId);
-                if (session) {
-                    // 将消息传递给对应的会话
-                    session.next(message);
-                }
-            } else {
-                // 处理非会话消息
-                console.log(`收到来自 ${clientId} 的普通消息:`, message);
-
-                // 示例：处理客户端请求，创建新会话
-                if (message.type === "command") {
-                    // 创建新会话处理命令
-                    const session = manager.createSession(clientId);
-
-                    // 发送会话消息并等待响应
-                    session
-                        .send({
-                            type: "response",
-                            command: message.command,
-                            status: "processing",
-                        })
-                        .then(() => {
-                            // 模拟处理命令
-                            setTimeout(() => {
-                                session.send({
-                                    type: "response",
-                                    command: message.command,
-                                    status: "completed",
-                                    result: `命令 "${message.command}" 已执行完成`,
-                                });
-
-                                // 结束会话
-                                session.end();
-                            }, 1000);
-                        });
-                }
-            }
-        } catch (error) {
-            console.error("消息解析错误:", error);
-        }
-    });
-
-    // 处理连接关闭
-    ws.on("close", () => {
-        console.log(`客户端已断开: ${clientId}`);
-        // 销毁该客户端的所有会话
-        port.destroy();
-    });
-});
-
-// 监听会话创建事件
-manager.on("session:create", (session) => {
-    console.log(`新会话已创建: ${session.id} (端口: ${session.port})`);
-});
-```
-
-### WebSocket 客户端端
+**SID Configuration**
 
 ```typescript
-import { SessionManager } from "psession";
-import WebSocket from "ws";
-
-// 创建WebSocket客户端
-const ws = new WebSocket("ws://localhost:8080");
-
-// 创建会话管理器
+// Customize session ID field name
 const manager = new SessionManager({
     sender: (message) => {
-        // 发送消息到服务器
-        if (ws.readyState === ws.OPEN) {
-            ws.send(JSON.stringify(message));
-        } else {
-            console.error("WebSocket未连接，无法发送消息");
-        }
+        /* Sending logic */
     },
-    sessionTimeout: 5000, // 5秒超时
-});
-
-// 连接成功时的处理
-ws.on("open", () => {
-    console.log("已连接到服务器");
-
-    // 发送普通命令消息
-    ws.send(
-        JSON.stringify({
-            type: "command",
-            command: "getStatus",
-        })
-    );
-
-    // 创建会话并发送消息
-    const session = manager.createSession("default");
-
-    // 使用会话发送消息并等待响应
-    session
-        .send({
-            type: "query",
-            query: "getDeviceList",
-        })
-        .then((response) => {
-            console.log("收到会话响应:", response);
-
-            // 在同一会话中继续发送消息
-            return session.send({
-                type: "query",
-                query: "getDeviceDetails",
-                deviceId: response.devices[0].id,
-            });
-        })
-        .then((details) => {
-            console.log("收到设备详情:", details);
-
-            // 结束会话
-            session.end();
-        })
-        .catch((error) => {
-            console.error("会话错误:", error);
-            session.end();
-        });
-});
-
-// 处理服务器消息
-ws.on("message", (data) => {
-    try {
-        const message = JSON.parse(data.toString());
-
-        // 判断是否是会话消息
-        if (manager.isSession(message)) {
-            const session = manager.getSession(message);
-            if (session) {
-                // 将消息传递给对应的会话
-                session.next(message);
-            }
-        } else {
-            // 处理非会话消息
-            console.log("收到服务器普通消息:", message);
-        }
-    } catch (error) {
-        console.error("消息解析错误:", error);
-    }
-});
-
-// 处理连接关闭
-ws.on("close", () => {
-    console.log("与服务器的连接已关闭");
-});
-
-// 处理错误
-ws.on("error", (error) => {
-    console.error("WebSocket错误:", error);
-});
-```
-
-## 指南
-
-### 会话原理
-
-`PSession`的核心是基于会话 ID（`sid`）的会话管理机制，它通过在消息中嵌入唯一的会话标识符来跟踪和管理多个并发会话。
-
-1. **SID 的生成与分配**：
-
-    - 每个新会话被创建时，系统会自动分配一个唯一的数字`ID`
-    - `SID` 从 `1` 开始递增，直到达到配置的最大会话数（默认`65535`）
-    - 当 `SID` 用尽时，系统会根据配置的策略回收最早的会话 ID
-
-2. **消息标记机制**：
-
-    - 发送消息时，系统自动在消息对象中添加会话 `SID` 字段（默认字段名为 `sid`）
-    - 接收方通过检查消息中的`SID`字段来识别和路由消息到对应的会话处理器
-    - 这种机制使得多个会话的消息可以在同一通道中传输而不会混淆
-
-3. **会话生命周期管理**：
-    - 会话创建：通过 `createSession()` 方法创建新会话
-    - 会话活跃：每次发送消息时更新会话的最后活动时间
-    - 会话结束：通过 `session.end()` 方法主动结束会话，或等待系统自动清理超时会话
-
-**SID 配置**
-
-```typescript
-// 自定义会话 ID 字段名
-const manager = new SessionManager({
-    sender: (message) => {
-        /* 发送逻辑 */
-    },
-    sessionIdName: "sessionId", // 将默认的 'sid' 改为 'sessionId'
-    maxSessionCount: 1000, // 设置最大会话数为 1000（默认 65535）
-    // 自定义会话溢出处理策略
+    sessionIdName: "sessionId", // Change default 'sid' to 'sessionId'
+    maxSessionCount: 1000, // Set maximum session count to 1000 (default 65535)
+    // Custom session overflow handling strategy
     onSessionOverflow: (port) => {
-        // 返回要回收的会话 ID
-        // 默认返回 1，即回收最早创建的会话
+        // Return the session ID to be recycled
+        // Default returns 1, i.e., recycle the earliest created session
         return 1;
     },
 });
-```
+````
 
-### 创建会话管理器
+### Creating a Session Manager
 
 ```typescript
 import { SessionManager } from "psession";
 
-// 创建会话管理器
+// Create session manager
 const manager = new SessionManager({
-    // 发送消息的函数
+    // Function to send messages
     sender: (message) => {
-        // 实现消息发送逻辑
-        console.log("发送消息:", message);
-        // 例如: socket.send(JSON.stringify(message));
+        // Implement message sending logic
+        console.log("Sending message:", message);
+        // For example: socket.send(JSON.stringify(message));
     },
-    // 可选配置
-    sessionTimeout: 5000, // 会话超时时间，默认 60000ms (1分钟)
-    sessionMaxLife: 600000, // 会话最大生命周期，默认 600000ms (10分钟)
-    sessionIdName: "sid", // 会话ID字段名，默认 'sid'
-    maxSessionCount: 255, // 最大会话数，默认 65535
+    // Optional configuration
+    sessionTimeout: 5000, // Session timeout, default 60000ms (1 minute)
+    sessionMaxLife: 600000, // Maximum session lifecycle, default 600000ms (10 minutes)
+    sessionIdName: "sid", // Session ID field name, default 'sid'
+    maxSessionCount: 255, // Maximum session count, default 65535
 });
 ```
 
-### 创建和使用会话
+### Creating and Using Sessions
 
 ```typescript
-// 创建一个会话
+// Create a session
 const session = manager.createSession("default");
 
-// 发送消息并等待回复
+// Send message and wait for reply
 try {
-    const response = await session.send({ command: "打开灯" });
-    console.log("收到回复:", response);
+    const response = await session.send({ command: "turnOnLight" });
+    console.log("Received reply:", response);
 
-    // 可以在同一会话中继续发送消息
+    // Can continue sending messages in the same session
     if (response.status === "needPassword") {
         const result = await session.send({ password: "123456" });
-        console.log("验证结果:", result);
+        console.log("Verification result:", result);
     }
 } catch (error) {
     if (error instanceof SessionTimeoutError) {
-        console.error("会话超时");
+        console.error("Session timeout");
     }
 } finally {
-    // 会话结束后记得调用 end 方法释放资源
+    // Remember to call end method to release resources after session ends
     session.end();
 }
 ```
 
-### 处理会话消息
+### Handling Session Messages
 
-**重点**：当从远端接收到消息时，需要通过`manager.isSession(message)`判断是否是会话消息，如果是，则通过`manager.getSession(message, message.from)`获取对应的会话，然后调用`session.next(message)`将消息传递给会话处理函数。
+**Important**: When receiving messages from remote endpoints, you need to use `manager.isSession(message)` to determine if it's a session message. If it is, get the corresponding session via `manager.getSession(message, message.from)` and then call `session.next(message)` to pass the message to the session handler.
 
 ```typescript
-// 在消息接收处理函数中
+// In message receiving handler function
 function onMessage(message) {
-    // 判断是否是会话消息
+    // Check if it's a session message
     if (manager.isSession(message)) {
-        // 获取对应的会话
+        // Get the corresponding session
         const session = manager.getSession(message, message.from);
         if (session) {
-            // 将消息传递给会话处理
+            // Pass the message to session handler
             session.next(message);
         }
     } else {
-        // 处理非会话消息
-        console.log("收到普通消息:", message);
+        // Handle non-session messages
+        console.log("Received regular message:", message);
     }
 }
 ```
 
-### 重试机制
+### Retry Mechanism
 
-`Psession` 内置了重试机制，可以通过 `send` 方法的 `retryCount` 和 `retryInterval` 参数来设置重试次数和重试间隔。
+`PSession` has a built-in retry mechanism that can be configured using the `retryCount` and `retryInterval` parameters of the `send` method.
 
 ```typescript
 import { SessionTimeoutError } from "psession";
 
-// 使用内置重试机制发送消息
+// Use built-in retry mechanism to send messages
 async function sendWithRetry() {
     const session = manager.createSession("device1");
 
     try {
-        // 直接在send方法中设置重试参数
+        // Set retry parameters directly in the send method
         const response = await session.send(
-            { command: "查询状态" },
+            { command: "queryStatus" },
             {
-                retryCount: 3, // 重试3次（总共4次）
-                retryInterval: 500, // 每次重试间隔500ms
+                retryCount: 3, // Retry 3 times (4 times total)
+                retryInterval: 500, // 500ms interval between retries
             }
         );
-        console.log("收到回复:", response);
+        console.log("Received reply:", response);
     } catch (error) {
         if (error instanceof SessionTimeoutError) {
-            console.error("多次重试后仍然超时");
+            console.error("Still timed out after multiple retries");
         } else {
-            console.error("发生错误:", error);
+            console.error("Error occurred:", error);
         }
     } finally {
         session.end();
@@ -362,145 +161,145 @@ async function sendWithRetry() {
 }
 ```
 
-### 超时机制
+### Timeout Mechanism
 
-`PSession`提供了两种超时机制来管理会话的生命周期：
+`PSession` provides two timeout mechanisms to manage session lifecycles:
 
-1. **会话超时（sessionTimeout）**：控制每次发送消息后等待响应的最大时间
-2. **会话最大生命周期（sessionMaxLife）**：控制整个会话对象的最大存活时间
+1. **Session Timeout (sessionTimeout)**: Controls the maximum time to wait for a response after sending a message
+2. **Session Maximum Lifetime (sessionMaxLife)**: Controls the maximum survival time of the entire session object
 
 ```typescript
-// 创建会话管理器时配置超时参数
+// Configure timeout parameters when creating session manager
 const manager = new SessionManager({
     sender: (message) => {
-        /* 发送逻辑 */
+        /* Sending logic */
     },
-    sessionTimeout: 5000, // 5秒后如果没有收到响应，会话将超时
-    sessionMaxLife: 600000, // 10分钟后，即使会话仍在使用，也会被自动清理
+    sessionTimeout: 5000, // Session will timeout if no response is received after 5 seconds
+    sessionMaxLife: 600000, // After 10 minutes, the session will be automatically cleaned up even if still in use
 });
 
-// 单次发送时配置超时参数（优先级高于全局配置）
+// Configure timeout parameter for a single send (higher priority than global configuration)
 try {
     const response = await session.send(
-        { command: "查询状态" },
-        { timeout: 3000 } // 仅为此次请求设置3秒超时
+        { command: "queryStatus" },
+        { timeout: 3000 } // Set 3 seconds timeout for this request only
     );
-    console.log("收到回复:", response);
+    console.log("Received reply:", response);
 } catch (error) {
     if (error instanceof SessionTimeoutError) {
-        console.error("请求超时");
+        console.error("Request timeout");
     }
 }
 ```
 
-**超时机制工作原理**：
+**How Timeout Mechanism Works**:
 
--   每次发送消息后，系统会启动一个计时器，如果在 `sessionTimeout` 时间内没有收到响应，会抛出 `SessionTimeoutError`
--   系统会定期检查所有会话（默认每 `sessionTimeout/2` 时间检查一次）
--   如果发现会话的最后活动时间超过 `sessionMaxLife`，会自动结束并清理该会话
--   当使用重试机制时，超时检测会暂停，直到所有重试完成
+-   After sending a message, the system starts a timer. If no response is received within `sessionTimeout`, a `SessionTimeoutError` is thrown
+-   The system periodically checks all sessions (default every `sessionTimeout/2` time)
+-   If a session's last activity time exceeds `sessionMaxLife`, the session is automatically terminated and cleaned up
+-   When using the retry mechanism, timeout detection is paused until all retries are completed
 
 ### Port
 
-在`PSession`中，`Port`（端口）是一个重要概念，特别适用于一对多、多对多通信场景：
+In `PSession`, `Port` is an important concept, especially suitable for one-to-many and many-to-many communication scenarios:
 
-1. **端口的作用**：
+1. **Purpose of Ports**:
 
-    - 端口用于区分不同的通信对端（如不同的设备、服务或客户端）
-    - 每个端口维护自己的会话集合，使得不同端口的会话 ID 可以独立管理
-    - 端口机制使系统能够同时与多个对端建立会话，而不会混淆会话状态
+    - Ports are used to distinguish different communication endpoints (such as different devices, services, or clients)
+    - Each port maintains its own collection of sessions, allowing session IDs from different ports to be managed independently
+    - The port mechanism enables the system to establish sessions with multiple endpoints simultaneously without confusing session states
 
-2. **一对多通信场景**：
+2. **One-to-Many Communication Scenarios**:
 
-    - 当一个应用需要同时与多个设备通信时，可以为每个设备创建一个端口
-    - 每个端口可以独立管理与对应设备的会话，使用各自的会话 ID 空间
-    - 例如：一个控制中心同时连接多个智能家居设备，每个设备使用独立端口
+    - When an application needs to communicate with multiple devices simultaneously, it can create a port for each device
+    - Each port can independently manage sessions with the corresponding device, using its own session ID space
+    - Example: A control center connecting to multiple smart home devices, each device using an independent port
 
-3. **多对多通信场景**：
+3. **Many-to-Many Communication Scenarios**:
 
-    - 在复杂系统中，多个服务需要与多个客户端通信
-    - 端口机制允许系统为每对通信关系创建独立的会话管理空间
-    - 例如：微服务架构中，服务 A 需要同时与服务 B、C、D 通信
+    - In complex systems, multiple services need to communicate with multiple clients
+    - The port mechanism allows the system to create independent session management spaces for each communication relationship
+    - Example: In a microservice architecture, Service A needs to communicate simultaneously with Services B, C, and D
 
-示例如下：
+Example below:
 
-### Socket 服务器示例
+### Socket Server Example
 
-以下是一个简单的 Socket 服务器使用 PSession 的示例，展示了如何管理多个客户端的会话：
+Here's a simple example of a Socket server using PSession, showing how to manage sessions for multiple clients:
 
 ```typescript
 import { SessionManager } from "psession";
 import * as net from "net";
 
-// 创建会话管理器
+// Create session manager
 const manager = new SessionManager({
     sender: (message) => {
-        // 发送消息到客户端
+        // Send message to client
         const client = message.client;
         if (client && !client.destroyed) {
             client.write(JSON.stringify(message));
         }
     },
-    sessionTimeout: 10000, // 10秒超时
+    sessionTimeout: 10000, // 10 seconds timeout
 });
 
-// 创建 TCP 服务器
+// Create TCP server
 const server = net.createServer((client) => {
-    console.log("客户端已连接", client.remoteAddress);
+    console.log("Client connected", client.remoteAddress);
 
-    // 为每个客户端创建一个端口
+    // Create a port for each client
     const portName = `client_${client.remoteAddress}:${client.remotePort}`;
     const port = manager.createPort(portName, {
         sender: (message) => {
-            // 发送消息到特定客户端
+            // Send message to specific client
             if (!client.destroyed) {
                 client.write(JSON.stringify(message));
             }
         },
     });
 
-    // 处理客户端消息
+    // Handle client messages
     client.on("data", (data) => {
         try {
             const message = JSON.parse(data.toString());
-            message.client = client; // 附加客户端引用
+            message.client = client; // Attach client reference
 
-            // 如果是会话消息，交给会话管理器处理
+            // If it's a session message, pass it to the session manager
             if (manager.isSession(message)) {
                 const session = manager.getSession(message, portName);
                 if (session) {
                     session.next(message);
                 }
             } else {
-                // 处理非会话消息
-                console.log("收到普通消息:", message);
+                // Handle non-session messages
+                console.log("Received regular message:", message);
             }
         } catch (error) {
-            console.error("消息解析错误:", error);
+            console.error("Message parsing error:", error);
         }
     });
 
-    // 客户端断开连接时清理资源
+    // Clean up resources when client disconnects
     client.on("end", () => {
-        console.log("客户端已断开", client.remoteAddress);
-        port.destory();
+        console.log("Client disconnected", client.remoteAddress);
+        port.destroy();
     });
 });
 
-// 启动服务器
+// Start server
 server.listen(3000, () => {
-    console.log("服务器已启动，监听端口 3000");
+    console.log("Server started, listening on port 3000");
 });
 
-// 示例：处理客户端命令
+// Example: Handle client commands
 manager.on("session:create", (session) => {
-    console.log("新会话创建:", session.id);
+    console.log("New session created:", session.id);
 
-    // 设置会话处理函数
+    // Set session handler function
     session.on("next", async (message) => {
-        console.log("收到会话消息:", message);
+        console.log("Received session message:", message);
 
-        // 模拟处理命令
+        // Simulate command processing
         if (message.command === "getTime") {
             await session.send({
                 status: "success",
@@ -511,21 +310,21 @@ manager.on("session:create", (session) => {
 });
 ```
 
-这个示例展示了如何：
+This example demonstrates how to:
 
-1. 为每个连接的客户端创建一个独立的端口
-2. 使用会话管理器处理客户端消息
-3. 实现基本的命令处理逻辑
-4. 管理会话生命周期和资源清理
+1. Create an independent port for each connected client
+2. Use the session manager to handle client messages
+3. Implement basic command processing logic
+4. Manage session lifecycle and resource cleanup
 
-## 错误处理
+## Error Handling
 
-`PSession`提供了几种错误类型来帮助处理不同的异常情况：
+`PSession` provides several error types to help handle different exception situations:
 
--   `SessionTimeoutError`: 会话超时错误
--   `SessionCancelError`: 会话被取消错误
--   `SessionInvalidError`: 无效会话错误
--   `SessionAbortError`: 会话中止错误
+-   `SessionTimeoutError`: Session timeout error
+-   `SessionCancelError`: Session cancelled error
+-   `SessionInvalidError`: Invalid session error
+-   `SessionAbortError`: Session aborted error
 
 ```typescript
 import {
@@ -539,27 +338,3553 @@ try {
     const response = await session.send({ command: "query" });
 } catch (error) {
     if (error instanceof SessionTimeoutError) {
-        console.error("会话超时");
+        console.error("Session timeout");
     } else if (error instanceof SessionCancelError) {
-        console.error("会话被取消");
+        console.error("Session cancelled");
     } else if (error instanceof SessionInvalidError) {
-        console.error("无效的会话");
+        console.error("Invalid session");
     } else if (error instanceof SessionAbortError) {
-        console.error("会话被中止");
+        console.error("Session aborted");
     } else {
-        console.error("未知错误:", error);
+        console.error("Unknown error:", error);
     }
 }
 ```
 
-## 注意事项
+## Notes
 
-1. 会话使用完毕后务必调用 `session.end()` 方法释放资源
-2. 合理设置 `sessionTimeout` 和 `sessionMaxLife` 参数，避免资源浪费
-3. 处理接收到的消息时，确保正确调用 `session.next(message)` 方法
+1. Always call the `session.end()` method to release resources after using a session
+2. Set appropriate `sessionTimeout` and `sessionMaxLife` parameters to avoid resource waste
+3. When handling received messages, ensure correct calling of the `session.next(message)` method
 
-## 许可证
+## License
 
 `MIT`
 
-[开源推荐](https://zhangfisher.github.io/repos/)
+[Open Source Recommendations](https://zhangfisher.github.io/repos/)
+
+## Quick Start - WebSocket Example
+
+Below is an example of a server and client implementation using WebSocket, demonstrating how to use PSession for session management:
+
+### WebSocket Server Side
+
+````
+
+## Guide
+
+### Session Principles
+
+The core of `PSession` is a session management mechanism based on session IDs (`sid`), which tracks and manages multiple concurrent sessions by embedding unique session identifiers in messages.
+
+1. **SID Generation and Assignment**:
+
+    - Each new session is automatically assigned a unique numeric `ID`
+    - `SID` starts from `1` and increments until it reaches the configured maximum session count (default `65535`)
+    - When `SID` is exhausted, the system recycles the earliest session ID according to the configured strategy
+
+2. **Message Marking Mechanism**:
+
+    - When sending a message, the system automatically adds a session `SID` field to the message object (default field name is `sid`)
+    - The receiver identifies and routes messages to the corresponding session handler by checking the `SID` field in the message
+    - This mechanism allows messages from multiple sessions to be transmitted in the same channel without confusion
+
+3. **Session Lifecycle Management**:
+    - Session creation: Create a new session via the `createSession()` method
+    - Session activity: Update the session's last activity time each time a message is sent
+    - Session termination: Actively end the session via the `session.end()` method, or wait for the system to automatically clean up timed-out sessions
+
+**SID Configuration**
+
+```typescript
+// Customize session ID field name
+const manager = new SessionManager({
+    sender: (message) => {
+        /* Sending logic */
+    },
+    sessionIdName: "sessionId", // Change default 'sid' to 'sessionId'
+    maxSessionCount: 1000, // Set maximum session count to 1000 (default 65535)
+    // Custom session overflow handling strategy
+    onSessionOverflow: (port) => {
+        // Return the session ID to be recycled
+        // Default returns 1, i.e., recycle the earliest created session
+        return 1;
+    },
+});
+````
+
+### Creating a Session Manager
+
+```typescript
+import { SessionManager } from "psession";
+
+// Create session manager
+const manager = new SessionManager({
+    // Function to send messages
+    sender: (message) => {
+        // Implement message sending logic
+        console.log("Sending message:", message);
+        // For example: socket.send(JSON.stringify(message));
+    },
+    // Optional configuration
+    sessionTimeout: 5000, // Session timeout, default 60000ms (1 minute)
+    sessionMaxLife: 600000, // Maximum session lifecycle, default 600000ms (10 minutes)
+    sessionIdName: "sid", // Session ID field name, default 'sid'
+    maxSessionCount: 255, // Maximum session count, default 65535
+});
+```
+
+### Creating and Using Sessions
+
+```typescript
+// Create a session
+const session = manager.createSession("default");
+
+// Send message and wait for reply
+try {
+    const response = await session.send({ command: "turnOnLight" });
+    console.log("Received reply:", response);
+
+    // Can continue sending messages in the same session
+    if (response.status === "needPassword") {
+        const result = await session.send({ password: "123456" });
+        console.log("Verification result:", result);
+    }
+} catch (error) {
+    if (error instanceof SessionTimeoutError) {
+        console.error("Session timeout");
+    }
+} finally {
+    // Remember to call end method to release resources after session ends
+    session.end();
+}
+```
+
+### Handling Session Messages
+
+**Important**: When receiving messages from remote endpoints, you need to use `manager.isSession(message)` to determine if it's a session message. If it is, get the corresponding session via `manager.getSession(message, message.from)` and then call `session.next(message)` to pass the message to the session handler.
+
+```typescript
+// In message receiving handler function
+function onMessage(message) {
+    // Check if it's a session message
+    if (manager.isSession(message)) {
+        // Get the corresponding session
+        const session = manager.getSession(message, message.from);
+        if (session) {
+            // Pass the message to session handler
+            session.next(message);
+        }
+    } else {
+        // Handle non-session messages
+        console.log("Received regular message:", message);
+    }
+}
+```
+
+### Retry Mechanism
+
+`PSession` has a built-in retry mechanism that can be configured using the `retryCount` and `retryInterval` parameters of the `send` method.
+
+```typescript
+import { SessionTimeoutError } from "psession";
+
+// Use built-in retry mechanism to send messages
+async function sendWithRetry() {
+    const session = manager.createSession("device1");
+
+    try {
+        // Set retry parameters directly in the send method
+        const response = await session.send(
+            { command: "queryStatus" },
+            {
+                retryCount: 3, // Retry 3 times (4 times total)
+                retryInterval: 500, // 500ms interval between retries
+            }
+        );
+        console.log("Received reply:", response);
+    } catch (error) {
+        if (error instanceof SessionTimeoutError) {
+            console.error("Still timed out after multiple retries");
+        } else {
+            console.error("Error occurred:", error);
+        }
+    } finally {
+        session.end();
+    }
+}
+```
+
+### Timeout Mechanism
+
+`PSession` provides two timeout mechanisms to manage session lifecycles:
+
+1. **Session Timeout (sessionTimeout)**: Controls the maximum time to wait for a response after sending a message
+2. **Session Maximum Lifetime (sessionMaxLife)**: Controls the maximum survival time of the entire session object
+
+```typescript
+// Configure timeout parameters when creating session manager
+const manager = new SessionManager({
+    sender: (message) => {
+        /* Sending logic */
+    },
+    sessionTimeout: 5000, // Session will timeout if no response is received after 5 seconds
+    sessionMaxLife: 600000, // After 10 minutes, the session will be automatically cleaned up even if still in use
+});
+
+// Configure timeout parameter for a single send (higher priority than global configuration)
+try {
+    const response = await session.send(
+        { command: "queryStatus" },
+        { timeout: 3000 } // Set 3 seconds timeout for this request only
+    );
+    console.log("Received reply:", response);
+} catch (error) {
+    if (error instanceof SessionTimeoutError) {
+        console.error("Request timeout");
+    }
+}
+```
+
+**How Timeout Mechanism Works**:
+
+-   After sending a message, the system starts a timer. If no response is received within `sessionTimeout`, a `SessionTimeoutError` is thrown
+-   The system periodically checks all sessions (default every `sessionTimeout/2` time)
+-   If a session's last activity time exceeds `sessionMaxLife`, the session is automatically terminated and cleaned up
+-   When using the retry mechanism, timeout detection is paused until all retries are completed
+
+### Port
+
+In `PSession`, `Port` is an important concept, especially suitable for one-to-many and many-to-many communication scenarios:
+
+1. **Purpose of Ports**:
+
+    - Ports are used to distinguish different communication endpoints (such as different devices, services, or clients)
+    - Each port maintains its own collection of sessions, allowing session IDs from different ports to be managed independently
+    - The port mechanism enables the system to establish sessions with multiple endpoints simultaneously without confusing session states
+
+2. **One-to-Many Communication Scenarios**:
+
+    - When an application needs to communicate with multiple devices simultaneously, it can create a port for each device
+    - Each port can independently manage sessions with the corresponding device, using its own session ID space
+    - Example: A control center connecting to multiple smart home devices, each device using an independent port
+
+3. **Many-to-Many Communication Scenarios**:
+
+    - In complex systems, multiple services need to communicate with multiple clients
+    - The port mechanism allows the system to create independent session management spaces for each communication relationship
+    - Example: In a microservice architecture, Service A needs to communicate simultaneously with Services B, C, and D
+
+Example below:
+
+### Socket Server Example
+
+Here's a simple example of a Socket server using PSession, showing how to manage sessions for multiple clients:
+
+```typescript
+import { SessionManager } from "psession";
+import * as net from "net";
+
+// Create session manager
+const manager = new SessionManager({
+    sender: (message) => {
+        // Send message to client
+        const client = message.client;
+        if (client && !client.destroyed) {
+            client.write(JSON.stringify(message));
+        }
+    },
+    sessionTimeout: 10000, // 10 seconds timeout
+});
+
+// Create TCP server
+const server = net.createServer((client) => {
+    console.log("Client connected", client.remoteAddress);
+
+    // Create a port for each client
+    const portName = `client_${client.remoteAddress}:${client.remotePort}`;
+    const port = manager.createPort(portName, {
+        sender: (message) => {
+            // Send message to specific client
+            if (!client.destroyed) {
+                client.write(JSON.stringify(message));
+            }
+        },
+    });
+
+    // Handle client messages
+    client.on("data", (data) => {
+        try {
+            const message = JSON.parse(data.toString());
+            message.client = client; // Attach client reference
+
+            // If it's a session message, pass it to the session manager
+            if (manager.isSession(message)) {
+                const session = manager.getSession(message, portName);
+                if (session) {
+                    session.next(message);
+                }
+            } else {
+                // Handle non-session messages
+                console.log("Received regular message:", message);
+            }
+        } catch (error) {
+            console.error("Message parsing error:", error);
+        }
+    });
+
+    // Clean up resources when client disconnects
+    client.on("end", () => {
+        console.log("Client disconnected", client.remoteAddress);
+        port.destroy();
+    });
+});
+
+// Start server
+server.listen(3000, () => {
+    console.log("Server started, listening on port 3000");
+});
+
+// Example: Handle client commands
+manager.on("session:create", (session) => {
+    console.log("New session created:", session.id);
+
+    // Set session handler function
+    session.on("next", async (message) => {
+        console.log("Received session message:", message);
+
+        // Simulate command processing
+        if (message.command === "getTime") {
+            await session.send({
+                status: "success",
+                time: new Date().toISOString(),
+            });
+        }
+    });
+});
+```
+
+This example demonstrates how to:
+
+1. Create an independent port for each connected client
+2. Use the session manager to handle client messages
+3. Implement basic command processing logic
+4. Manage session lifecycle and resource cleanup
+
+## Error Handling
+
+`PSession` provides several error types to help handle different exception situations:
+
+-   `SessionTimeoutError`: Session timeout error
+-   `SessionCancelError`: Session cancelled error
+-   `SessionInvalidError`: Invalid session error
+-   `SessionAbortError`: Session aborted error
+
+```typescript
+import {
+    SessionTimeoutError,
+    SessionCancelError,
+    SessionInvalidError,
+    SessionAbortError,
+} from "psession";
+
+try {
+    const response = await session.send({ command: "query" });
+} catch (error) {
+    if (error instanceof SessionTimeoutError) {
+        console.error("Session timeout");
+    } else if (error instanceof SessionCancelError) {
+        console.error("Session cancelled");
+    } else if (error instanceof SessionInvalidError) {
+        console.error("Invalid session");
+    } else if (error instanceof SessionAbortError) {
+        console.error("Session aborted");
+    } else {
+        console.error("Unknown error:", error);
+    }
+}
+```
+
+## Notes
+
+1. Always call the `session.end()` method to release resources after using a session
+2. Set appropriate `sessionTimeout` and `sessionMaxLife` parameters to avoid resource waste
+3. When handling received messages, ensure correct calling of the `session.next(message)` method
+
+## License
+
+`MIT`
+
+[Open Source Recommendations](https://zhangfisher.github.io/repos/)typescript
+import { SessionManager } from "psession";
+import { WebSocketServer } from "ws";
+
+// Create WebSocket server
+const wss = new WebSocketServer({ port: 8080 });
+console.log("WebSocket server started, listening on port 8080");
+
+// Create session manager
+const manager = new SessionManager({
+sender: (message) => {
+// This function won't be used directly as we'll create independent ports for each client
+console.log("Default sender should not be called");
+},
+sessionTimeout: 10000, // 10 seconds timeout
+});
+
+// Handle new WebSocket connections
+wss.on("connection", (ws, req) => {
+const clientId = req.socket.remoteAddress + ":" + req.socket.remotePort;
+console.log(`Client connected: ${clientId}`);
+
+    // Create an independent port for each client
+    const port = manager.createPort(clientId, {
+        sender: (message) => {
+            // Send message to specific client
+            if (ws.readyState === ws.OPEN) {
+                ws.send(JSON.stringify(message));
+            }
+        },
+    });
+
+    // Handle messages from client
+    ws.on("message", (data) => {
+        try {
+            const message = JSON.parse(data.toString());
+
+            // Check if it's a session message
+            if (manager.isSession(message)) {
+                const session = manager.getSession(message, clientId);
+                if (session) {
+                    // Pass the message to the corresponding session
+                    session.next(message);
+                }
+            } else {
+                // Handle non-session messages
+                console.log(`Received regular message from ${clientId}:`, message);
+
+                // Example: Handle client request, create new session
+                if (message.type === "command") {
+                    // Create new session to handle command
+                    const session = manager.createSession(clientId);
+
+                    // Send session message and wait for response
+                    session
+                        .send({
+                            type: "response",
+                            command: message.command,
+                            status: "processing",
+                        })
+                        .then(() => {
+                            // Simulate command processing
+                            setTimeout(() => {
+                                session.send({
+                                    type: "response",
+                                    command: message.command,
+                                    status: "completed",
+                                    result: `Command "${message.command}" has been executed`,
+                                });
+
+                                // End session
+                                session.end();
+                            }, 1000);
+                        });
+                }
+            }
+        } catch (error) {
+            console.error("Message parsing error:", error);
+        }
+    });
+
+    // Handle connection close
+    ws.on("close", () => {
+        console.log(`Client disconnected: ${clientId}`);
+        // Destroy all sessions for this client
+        port.destroy();
+    });
+
+});
+
+// Listen for session creation events
+manager.on("session:create", (session) => {
+console.log(`New session created: ${session.id} (port: ${session.port})`);
+});
+
+````
+
+## Guide
+
+### Session Principles
+
+The core of `PSession` is a session management mechanism based on session IDs (`sid`), which tracks and manages multiple concurrent sessions by embedding unique session identifiers in messages.
+
+1. **SID Generation and Assignment**:
+
+    - Each new session is automatically assigned a unique numeric `ID`
+    - `SID` starts from `1` and increments until it reaches the configured maximum session count (default `65535`)
+    - When `SID` is exhausted, the system recycles the earliest session ID according to the configured strategy
+
+2. **Message Marking Mechanism**:
+
+    - When sending a message, the system automatically adds a session `SID` field to the message object (default field name is `sid`)
+    - The receiver identifies and routes messages to the corresponding session handler by checking the `SID` field in the message
+    - This mechanism allows messages from multiple sessions to be transmitted in the same channel without confusion
+
+3. **Session Lifecycle Management**:
+    - Session creation: Create a new session via the `createSession()` method
+    - Session activity: Update the session's last activity time each time a message is sent
+    - Session termination: Actively end the session via the `session.end()` method, or wait for the system to automatically clean up timed-out sessions
+
+**SID Configuration**
+
+```typescript
+// Customize session ID field name
+const manager = new SessionManager({
+    sender: (message) => {
+        /* Sending logic */
+    },
+    sessionIdName: "sessionId", // Change default 'sid' to 'sessionId'
+    maxSessionCount: 1000, // Set maximum session count to 1000 (default 65535)
+    // Custom session overflow handling strategy
+    onSessionOverflow: (port) => {
+        // Return the session ID to be recycled
+        // Default returns 1, i.e., recycle the earliest created session
+        return 1;
+    },
+});
+````
+
+### Creating a Session Manager
+
+```typescript
+import { SessionManager } from "psession";
+
+// Create session manager
+const manager = new SessionManager({
+    // Function to send messages
+    sender: (message) => {
+        // Implement message sending logic
+        console.log("Sending message:", message);
+        // For example: socket.send(JSON.stringify(message));
+    },
+    // Optional configuration
+    sessionTimeout: 5000, // Session timeout, default 60000ms (1 minute)
+    sessionMaxLife: 600000, // Maximum session lifecycle, default 600000ms (10 minutes)
+    sessionIdName: "sid", // Session ID field name, default 'sid'
+    maxSessionCount: 255, // Maximum session count, default 65535
+});
+```
+
+### Creating and Using Sessions
+
+```typescript
+// Create a session
+const session = manager.createSession("default");
+
+// Send message and wait for reply
+try {
+    const response = await session.send({ command: "turnOnLight" });
+    console.log("Received reply:", response);
+
+    // Can continue sending messages in the same session
+    if (response.status === "needPassword") {
+        const result = await session.send({ password: "123456" });
+        console.log("Verification result:", result);
+    }
+} catch (error) {
+    if (error instanceof SessionTimeoutError) {
+        console.error("Session timeout");
+    }
+} finally {
+    // Remember to call end method to release resources after session ends
+    session.end();
+}
+```
+
+### Handling Session Messages
+
+**Important**: When receiving messages from remote endpoints, you need to use `manager.isSession(message)` to determine if it's a session message. If it is, get the corresponding session via `manager.getSession(message, message.from)` and then call `session.next(message)` to pass the message to the session handler.
+
+```typescript
+// In message receiving handler function
+function onMessage(message) {
+    // Check if it's a session message
+    if (manager.isSession(message)) {
+        // Get the corresponding session
+        const session = manager.getSession(message, message.from);
+        if (session) {
+            // Pass the message to session handler
+            session.next(message);
+        }
+    } else {
+        // Handle non-session messages
+        console.log("Received regular message:", message);
+    }
+}
+```
+
+### Retry Mechanism
+
+`PSession` has a built-in retry mechanism that can be configured using the `retryCount` and `retryInterval` parameters of the `send` method.
+
+```typescript
+import { SessionTimeoutError } from "psession";
+
+// Use built-in retry mechanism to send messages
+async function sendWithRetry() {
+    const session = manager.createSession("device1");
+
+    try {
+        // Set retry parameters directly in the send method
+        const response = await session.send(
+            { command: "queryStatus" },
+            {
+                retryCount: 3, // Retry 3 times (4 times total)
+                retryInterval: 500, // 500ms interval between retries
+            }
+        );
+        console.log("Received reply:", response);
+    } catch (error) {
+        if (error instanceof SessionTimeoutError) {
+            console.error("Still timed out after multiple retries");
+        } else {
+            console.error("Error occurred:", error);
+        }
+    } finally {
+        session.end();
+    }
+}
+```
+
+### Timeout Mechanism
+
+`PSession` provides two timeout mechanisms to manage session lifecycles:
+
+1. **Session Timeout (sessionTimeout)**: Controls the maximum time to wait for a response after sending a message
+2. **Session Maximum Lifetime (sessionMaxLife)**: Controls the maximum survival time of the entire session object
+
+```typescript
+// Configure timeout parameters when creating session manager
+const manager = new SessionManager({
+    sender: (message) => {
+        /* Sending logic */
+    },
+    sessionTimeout: 5000, // Session will timeout if no response is received after 5 seconds
+    sessionMaxLife: 600000, // After 10 minutes, the session will be automatically cleaned up even if still in use
+});
+
+// Configure timeout parameter for a single send (higher priority than global configuration)
+try {
+    const response = await session.send(
+        { command: "queryStatus" },
+        { timeout: 3000 } // Set 3 seconds timeout for this request only
+    );
+    console.log("Received reply:", response);
+} catch (error) {
+    if (error instanceof SessionTimeoutError) {
+        console.error("Request timeout");
+    }
+}
+```
+
+**How Timeout Mechanism Works**:
+
+-   After sending a message, the system starts a timer. If no response is received within `sessionTimeout`, a `SessionTimeoutError` is thrown
+-   The system periodically checks all sessions (default every `sessionTimeout/2` time)
+-   If a session's last activity time exceeds `sessionMaxLife`, the session is automatically terminated and cleaned up
+-   When using the retry mechanism, timeout detection is paused until all retries are completed
+
+### Port
+
+In `PSession`, `Port` is an important concept, especially suitable for one-to-many and many-to-many communication scenarios:
+
+1. **Purpose of Ports**:
+
+    - Ports are used to distinguish different communication endpoints (such as different devices, services, or clients)
+    - Each port maintains its own collection of sessions, allowing session IDs from different ports to be managed independently
+    - The port mechanism enables the system to establish sessions with multiple endpoints simultaneously without confusing session states
+
+2. **One-to-Many Communication Scenarios**:
+
+    - When an application needs to communicate with multiple devices simultaneously, it can create a port for each device
+    - Each port can independently manage sessions with the corresponding device, using its own session ID space
+    - Example: A control center connecting to multiple smart home devices, each device using an independent port
+
+3. **Many-to-Many Communication Scenarios**:
+
+    - In complex systems, multiple services need to communicate with multiple clients
+    - The port mechanism allows the system to create independent session management spaces for each communication relationship
+    - Example: In a microservice architecture, Service A needs to communicate simultaneously with Services B, C, and D
+
+Example below:
+
+### Socket Server Example
+
+Here's a simple example of a Socket server using PSession, showing how to manage sessions for multiple clients:
+
+```typescript
+import { SessionManager } from "psession";
+import * as net from "net";
+
+// Create session manager
+const manager = new SessionManager({
+    sender: (message) => {
+        // Send message to client
+        const client = message.client;
+        if (client && !client.destroyed) {
+            client.write(JSON.stringify(message));
+        }
+    },
+    sessionTimeout: 10000, // 10 seconds timeout
+});
+
+// Create TCP server
+const server = net.createServer((client) => {
+    console.log("Client connected", client.remoteAddress);
+
+    // Create a port for each client
+    const portName = `client_${client.remoteAddress}:${client.remotePort}`;
+    const port = manager.createPort(portName, {
+        sender: (message) => {
+            // Send message to specific client
+            if (!client.destroyed) {
+                client.write(JSON.stringify(message));
+            }
+        },
+    });
+
+    // Handle client messages
+    client.on("data", (data) => {
+        try {
+            const message = JSON.parse(data.toString());
+            message.client = client; // Attach client reference
+
+            // If it's a session message, pass it to the session manager
+            if (manager.isSession(message)) {
+                const session = manager.getSession(message, portName);
+                if (session) {
+                    session.next(message);
+                }
+            } else {
+                // Handle non-session messages
+                console.log("Received regular message:", message);
+            }
+        } catch (error) {
+            console.error("Message parsing error:", error);
+        }
+    });
+
+    // Clean up resources when client disconnects
+    client.on("end", () => {
+        console.log("Client disconnected", client.remoteAddress);
+        port.destroy();
+    });
+});
+
+// Start server
+server.listen(3000, () => {
+    console.log("Server started, listening on port 3000");
+});
+
+// Example: Handle client commands
+manager.on("session:create", (session) => {
+    console.log("New session created:", session.id);
+
+    // Set session handler function
+    session.on("next", async (message) => {
+        console.log("Received session message:", message);
+
+        // Simulate command processing
+        if (message.command === "getTime") {
+            await session.send({
+                status: "success",
+                time: new Date().toISOString(),
+            });
+        }
+    });
+});
+```
+
+This example demonstrates how to:
+
+1. Create an independent port for each connected client
+2. Use the session manager to handle client messages
+3. Implement basic command processing logic
+4. Manage session lifecycle and resource cleanup
+
+## Error Handling
+
+`PSession` provides several error types to help handle different exception situations:
+
+-   `SessionTimeoutError`: Session timeout error
+-   `SessionCancelError`: Session cancelled error
+-   `SessionInvalidError`: Invalid session error
+-   `SessionAbortError`: Session aborted error
+
+```typescript
+import {
+    SessionTimeoutError,
+    SessionCancelError,
+    SessionInvalidError,
+    SessionAbortError,
+} from "psession";
+
+try {
+    const response = await session.send({ command: "query" });
+} catch (error) {
+    if (error instanceof SessionTimeoutError) {
+        console.error("Session timeout");
+    } else if (error instanceof SessionCancelError) {
+        console.error("Session cancelled");
+    } else if (error instanceof SessionInvalidError) {
+        console.error("Invalid session");
+    } else if (error instanceof SessionAbortError) {
+        console.error("Session aborted");
+    } else {
+        console.error("Unknown error:", error);
+    }
+}
+```
+
+## Notes
+
+1. Always call the `session.end()` method to release resources after using a session
+2. Set appropriate `sessionTimeout` and `sessionMaxLife` parameters to avoid resource waste
+3. When handling received messages, ensure correct calling of the `session.next(message)` method
+
+## License
+
+`MIT`
+
+[Open Source Recommendations](https://zhangfisher.github.io/repos/)
+
+### WebSocket Client Side
+
+````
+
+## Guide
+
+### Session Principles
+
+The core of `PSession` is a session management mechanism based on session IDs (`sid`), which tracks and manages multiple concurrent sessions by embedding unique session identifiers in messages.
+
+1. **SID Generation and Assignment**:
+
+    - Each new session is automatically assigned a unique numeric `ID`
+    - `SID` starts from `1` and increments until it reaches the configured maximum session count (default `65535`)
+    - When `SID` is exhausted, the system recycles the earliest session ID according to the configured strategy
+
+2. **Message Marking Mechanism**:
+
+    - When sending a message, the system automatically adds a session `SID` field to the message object (default field name is `sid`)
+    - The receiver identifies and routes messages to the corresponding session handler by checking the `SID` field in the message
+    - This mechanism allows messages from multiple sessions to be transmitted in the same channel without confusion
+
+3. **Session Lifecycle Management**:
+    - Session creation: Create a new session via the `createSession()` method
+    - Session activity: Update the session's last activity time each time a message is sent
+    - Session termination: Actively end the session via the `session.end()` method, or wait for the system to automatically clean up timed-out sessions
+
+**SID Configuration**
+
+```typescript
+// Customize session ID field name
+const manager = new SessionManager({
+    sender: (message) => {
+        /* Sending logic */
+    },
+    sessionIdName: "sessionId", // Change default 'sid' to 'sessionId'
+    maxSessionCount: 1000, // Set maximum session count to 1000 (default 65535)
+    // Custom session overflow handling strategy
+    onSessionOverflow: (port) => {
+        // Return the session ID to be recycled
+        // Default returns 1, i.e., recycle the earliest created session
+        return 1;
+    },
+});
+````
+
+### Creating a Session Manager
+
+```typescript
+import { SessionManager } from "psession";
+
+// Create session manager
+const manager = new SessionManager({
+    // Function to send messages
+    sender: (message) => {
+        // Implement message sending logic
+        console.log("Sending message:", message);
+        // For example: socket.send(JSON.stringify(message));
+    },
+    // Optional configuration
+    sessionTimeout: 5000, // Session timeout, default 60000ms (1 minute)
+    sessionMaxLife: 600000, // Maximum session lifecycle, default 600000ms (10 minutes)
+    sessionIdName: "sid", // Session ID field name, default 'sid'
+    maxSessionCount: 255, // Maximum session count, default 65535
+});
+```
+
+### Creating and Using Sessions
+
+```typescript
+// Create a session
+const session = manager.createSession("default");
+
+// Send message and wait for reply
+try {
+    const response = await session.send({ command: "turnOnLight" });
+    console.log("Received reply:", response);
+
+    // Can continue sending messages in the same session
+    if (response.status === "needPassword") {
+        const result = await session.send({ password: "123456" });
+        console.log("Verification result:", result);
+    }
+} catch (error) {
+    if (error instanceof SessionTimeoutError) {
+        console.error("Session timeout");
+    }
+} finally {
+    // Remember to call end method to release resources after session ends
+    session.end();
+}
+```
+
+### Handling Session Messages
+
+**Important**: When receiving messages from remote endpoints, you need to use `manager.isSession(message)` to determine if it's a session message. If it is, get the corresponding session via `manager.getSession(message, message.from)` and then call `session.next(message)` to pass the message to the session handler.
+
+```typescript
+// In message receiving handler function
+function onMessage(message) {
+    // Check if it's a session message
+    if (manager.isSession(message)) {
+        // Get the corresponding session
+        const session = manager.getSession(message, message.from);
+        if (session) {
+            // Pass the message to session handler
+            session.next(message);
+        }
+    } else {
+        // Handle non-session messages
+        console.log("Received regular message:", message);
+    }
+}
+```
+
+### Retry Mechanism
+
+`PSession` has a built-in retry mechanism that can be configured using the `retryCount` and `retryInterval` parameters of the `send` method.
+
+```typescript
+import { SessionTimeoutError } from "psession";
+
+// Use built-in retry mechanism to send messages
+async function sendWithRetry() {
+    const session = manager.createSession("device1");
+
+    try {
+        // Set retry parameters directly in the send method
+        const response = await session.send(
+            { command: "queryStatus" },
+            {
+                retryCount: 3, // Retry 3 times (4 times total)
+                retryInterval: 500, // 500ms interval between retries
+            }
+        );
+        console.log("Received reply:", response);
+    } catch (error) {
+        if (error instanceof SessionTimeoutError) {
+            console.error("Still timed out after multiple retries");
+        } else {
+            console.error("Error occurred:", error);
+        }
+    } finally {
+        session.end();
+    }
+}
+```
+
+### Timeout Mechanism
+
+`PSession` provides two timeout mechanisms to manage session lifecycles:
+
+1. **Session Timeout (sessionTimeout)**: Controls the maximum time to wait for a response after sending a message
+2. **Session Maximum Lifetime (sessionMaxLife)**: Controls the maximum survival time of the entire session object
+
+```typescript
+// Configure timeout parameters when creating session manager
+const manager = new SessionManager({
+    sender: (message) => {
+        /* Sending logic */
+    },
+    sessionTimeout: 5000, // Session will timeout if no response is received after 5 seconds
+    sessionMaxLife: 600000, // After 10 minutes, the session will be automatically cleaned up even if still in use
+});
+
+// Configure timeout parameter for a single send (higher priority than global configuration)
+try {
+    const response = await session.send(
+        { command: "queryStatus" },
+        { timeout: 3000 } // Set 3 seconds timeout for this request only
+    );
+    console.log("Received reply:", response);
+} catch (error) {
+    if (error instanceof SessionTimeoutError) {
+        console.error("Request timeout");
+    }
+}
+```
+
+**How Timeout Mechanism Works**:
+
+-   After sending a message, the system starts a timer. If no response is received within `sessionTimeout`, a `SessionTimeoutError` is thrown
+-   The system periodically checks all sessions (default every `sessionTimeout/2` time)
+-   If a session's last activity time exceeds `sessionMaxLife`, the session is automatically terminated and cleaned up
+-   When using the retry mechanism, timeout detection is paused until all retries are completed
+
+### Port
+
+In `PSession`, `Port` is an important concept, especially suitable for one-to-many and many-to-many communication scenarios:
+
+1. **Purpose of Ports**:
+
+    - Ports are used to distinguish different communication endpoints (such as different devices, services, or clients)
+    - Each port maintains its own collection of sessions, allowing session IDs from different ports to be managed independently
+    - The port mechanism enables the system to establish sessions with multiple endpoints simultaneously without confusing session states
+
+2. **One-to-Many Communication Scenarios**:
+
+    - When an application needs to communicate with multiple devices simultaneously, it can create a port for each device
+    - Each port can independently manage sessions with the corresponding device, using its own session ID space
+    - Example: A control center connecting to multiple smart home devices, each device using an independent port
+
+3. **Many-to-Many Communication Scenarios**:
+
+    - In complex systems, multiple services need to communicate with multiple clients
+    - The port mechanism allows the system to create independent session management spaces for each communication relationship
+    - Example: In a microservice architecture, Service A needs to communicate simultaneously with Services B, C, and D
+
+Example below:
+
+### Socket Server Example
+
+Here's a simple example of a Socket server using PSession, showing how to manage sessions for multiple clients:
+
+```typescript
+import { SessionManager } from "psession";
+import * as net from "net";
+
+// Create session manager
+const manager = new SessionManager({
+    sender: (message) => {
+        // Send message to client
+        const client = message.client;
+        if (client && !client.destroyed) {
+            client.write(JSON.stringify(message));
+        }
+    },
+    sessionTimeout: 10000, // 10 seconds timeout
+});
+
+// Create TCP server
+const server = net.createServer((client) => {
+    console.log("Client connected", client.remoteAddress);
+
+    // Create a port for each client
+    const portName = `client_${client.remoteAddress}:${client.remotePort}`;
+    const port = manager.createPort(portName, {
+        sender: (message) => {
+            // Send message to specific client
+            if (!client.destroyed) {
+                client.write(JSON.stringify(message));
+            }
+        },
+    });
+
+    // Handle client messages
+    client.on("data", (data) => {
+        try {
+            const message = JSON.parse(data.toString());
+            message.client = client; // Attach client reference
+
+            // If it's a session message, pass it to the session manager
+            if (manager.isSession(message)) {
+                const session = manager.getSession(message, portName);
+                if (session) {
+                    session.next(message);
+                }
+            } else {
+                // Handle non-session messages
+                console.log("Received regular message:", message);
+            }
+        } catch (error) {
+            console.error("Message parsing error:", error);
+        }
+    });
+
+    // Clean up resources when client disconnects
+    client.on("end", () => {
+        console.log("Client disconnected", client.remoteAddress);
+        port.destroy();
+    });
+});
+
+// Start server
+server.listen(3000, () => {
+    console.log("Server started, listening on port 3000");
+});
+
+// Example: Handle client commands
+manager.on("session:create", (session) => {
+    console.log("New session created:", session.id);
+
+    // Set session handler function
+    session.on("next", async (message) => {
+        console.log("Received session message:", message);
+
+        // Simulate command processing
+        if (message.command === "getTime") {
+            await session.send({
+                status: "success",
+                time: new Date().toISOString(),
+            });
+        }
+    });
+});
+```
+
+This example demonstrates how to:
+
+1. Create an independent port for each connected client
+2. Use the session manager to handle client messages
+3. Implement basic command processing logic
+4. Manage session lifecycle and resource cleanup
+
+## Error Handling
+
+`PSession` provides several error types to help handle different exception situations:
+
+-   `SessionTimeoutError`: Session timeout error
+-   `SessionCancelError`: Session cancelled error
+-   `SessionInvalidError`: Invalid session error
+-   `SessionAbortError`: Session aborted error
+
+```typescript
+import {
+    SessionTimeoutError,
+    SessionCancelError,
+    SessionInvalidError,
+    SessionAbortError,
+} from "psession";
+
+try {
+    const response = await session.send({ command: "query" });
+} catch (error) {
+    if (error instanceof SessionTimeoutError) {
+        console.error("Session timeout");
+    } else if (error instanceof SessionCancelError) {
+        console.error("Session cancelled");
+    } else if (error instanceof SessionInvalidError) {
+        console.error("Invalid session");
+    } else if (error instanceof SessionAbortError) {
+        console.error("Session aborted");
+    } else {
+        console.error("Unknown error:", error);
+    }
+}
+```
+
+## Notes
+
+1. Always call the `session.end()` method to release resources after using a session
+2. Set appropriate `sessionTimeout` and `sessionMaxLife` parameters to avoid resource waste
+3. When handling received messages, ensure correct calling of the `session.next(message)` method
+
+## License
+
+`MIT`
+
+[Open Source Recommendations](https://zhangfisher.github.io/repos/)typescript
+import { SessionManager } from "psession";
+import WebSocket from "ws";
+
+// Create WebSocket client
+const ws = new WebSocket("ws://localhost:8080");
+
+// Create session manager
+const manager = new SessionManager({
+sender: (message) => {
+// Send message to server
+if (ws.readyState === ws.OPEN) {
+ws.send(JSON.stringify(message));
+} else {
+console.error("WebSocket not connected, cannot send message");
+}
+},
+sessionTimeout: 5000, // 5 seconds timeout
+});
+
+// Handle successful connection
+ws.on("open", () => {
+console.log("Connected to server");
+
+    // Send regular command message
+    ws.send(
+        JSON.stringify({
+            type: "command",
+            command: "getStatus",
+        })
+    );
+
+    // Create session and send message
+    const session = manager.createSession("default");
+
+    // Use session to send message and wait for response
+    session
+        .send({
+            type: "query",
+            query: "getDeviceList",
+        })
+        .then((response) => {
+            console.log("Received session response:", response);
+
+            // Continue sending messages in the same session
+            return session.send({
+                type: "query",
+                query: "getDeviceDetails",
+                deviceId: response.devices[0].id,
+            });
+        })
+        .then((details) => {
+            console.log("Received device details:", details);
+
+            // End session
+            session.end();
+        })
+        .catch((error) => {
+            console.error("Session error:", error);
+            session.end();
+        });
+
+});
+
+// Handle server messages
+ws.on("message", (data) => {
+try {
+const message = JSON.parse(data.toString());
+
+        // Check if it's a session message
+        if (manager.isSession(message)) {
+            const session = manager.getSession(message);
+            if (session) {
+                // Pass the message to the corresponding session
+                session.next(message);
+            }
+        } else {
+            // Handle non-session messages
+            console.log("Received regular server message:", message);
+        }
+    } catch (error) {
+        console.error("Message parsing error:", error);
+    }
+
+});
+
+// Handle connection close
+ws.on("close", () => {
+console.log("Connection to server closed");
+});
+
+// Handle errors
+ws.on("error", (error) => {
+console.error("WebSocket error:", error);
+});
+
+````
+
+## Guide
+
+### Session Principles
+
+The core of `PSession` is a session management mechanism based on session IDs (`sid`), which tracks and manages multiple concurrent sessions by embedding unique session identifiers in messages.
+
+1. **SID Generation and Assignment**:
+
+    - Each new session is automatically assigned a unique numeric `ID`
+    - `SID` starts from `1` and increments until it reaches the configured maximum session count (default `65535`)
+    - When `SID` is exhausted, the system recycles the earliest session ID according to the configured strategy
+
+2. **Message Marking Mechanism**:
+
+    - When sending a message, the system automatically adds a session `SID` field to the message object (default field name is `sid`)
+    - The receiver identifies and routes messages to the corresponding session handler by checking the `SID` field in the message
+    - This mechanism allows messages from multiple sessions to be transmitted in the same channel without confusion
+
+3. **Session Lifecycle Management**:
+    - Session creation: Create a new session via the `createSession()` method
+    - Session activity: Update the session's last activity time each time a message is sent
+    - Session termination: Actively end the session via the `session.end()` method, or wait for the system to automatically clean up timed-out sessions
+
+**SID Configuration**
+
+```typescript
+// Customize session ID field name
+const manager = new SessionManager({
+    sender: (message) => {
+        /* Sending logic */
+    },
+    sessionIdName: "sessionId", // Change default 'sid' to 'sessionId'
+    maxSessionCount: 1000, // Set maximum session count to 1000 (default 65535)
+    // Custom session overflow handling strategy
+    onSessionOverflow: (port) => {
+        // Return the session ID to be recycled
+        // Default returns 1, i.e., recycle the earliest created session
+        return 1;
+    },
+});
+````
+
+### Creating a Session Manager
+
+```typescript
+import { SessionManager } from "psession";
+
+// Create session manager
+const manager = new SessionManager({
+    // Function to send messages
+    sender: (message) => {
+        // Implement message sending logic
+        console.log("Sending message:", message);
+        // For example: socket.send(JSON.stringify(message));
+    },
+    // Optional configuration
+    sessionTimeout: 5000, // Session timeout, default 60000ms (1 minute)
+    sessionMaxLife: 600000, // Maximum session lifecycle, default 600000ms (10 minutes)
+    sessionIdName: "sid", // Session ID field name, default 'sid'
+    maxSessionCount: 255, // Maximum session count, default 65535
+});
+```
+
+### Creating and Using Sessions
+
+```typescript
+// Create a session
+const session = manager.createSession("default");
+
+// Send message and wait for reply
+try {
+    const response = await session.send({ command: "turnOnLight" });
+    console.log("Received reply:", response);
+
+    // Can continue sending messages in the same session
+    if (response.status === "needPassword") {
+        const result = await session.send({ password: "123456" });
+        console.log("Verification result:", result);
+    }
+} catch (error) {
+    if (error instanceof SessionTimeoutError) {
+        console.error("Session timeout");
+    }
+} finally {
+    // Remember to call end method to release resources after session ends
+    session.end();
+}
+```
+
+### Handling Session Messages
+
+**Important**: When receiving messages from remote endpoints, you need to use `manager.isSession(message)` to determine if it's a session message. If it is, get the corresponding session via `manager.getSession(message, message.from)` and then call `session.next(message)` to pass the message to the session handler.
+
+```typescript
+// In message receiving handler function
+function onMessage(message) {
+    // Check if it's a session message
+    if (manager.isSession(message)) {
+        // Get the corresponding session
+        const session = manager.getSession(message, message.from);
+        if (session) {
+            // Pass the message to session handler
+            session.next(message);
+        }
+    } else {
+        // Handle non-session messages
+        console.log("Received regular message:", message);
+    }
+}
+```
+
+### Retry Mechanism
+
+`PSession` has a built-in retry mechanism that can be configured using the `retryCount` and `retryInterval` parameters of the `send` method.
+
+```typescript
+import { SessionTimeoutError } from "psession";
+
+// Use built-in retry mechanism to send messages
+async function sendWithRetry() {
+    const session = manager.createSession("device1");
+
+    try {
+        // Set retry parameters directly in the send method
+        const response = await session.send(
+            { command: "queryStatus" },
+            {
+                retryCount: 3, // Retry 3 times (4 times total)
+                retryInterval: 500, // 500ms interval between retries
+            }
+        );
+        console.log("Received reply:", response);
+    } catch (error) {
+        if (error instanceof SessionTimeoutError) {
+            console.error("Still timed out after multiple retries");
+        } else {
+            console.error("Error occurred:", error);
+        }
+    } finally {
+        session.end();
+    }
+}
+```
+
+### Timeout Mechanism
+
+`PSession` provides two timeout mechanisms to manage session lifecycles:
+
+1. **Session Timeout (sessionTimeout)**: Controls the maximum time to wait for a response after sending a message
+2. **Session Maximum Lifetime (sessionMaxLife)**: Controls the maximum survival time of the entire session object
+
+```typescript
+// Configure timeout parameters when creating session manager
+const manager = new SessionManager({
+    sender: (message) => {
+        /* Sending logic */
+    },
+    sessionTimeout: 5000, // Session will timeout if no response is received after 5 seconds
+    sessionMaxLife: 600000, // After 10 minutes, the session will be automatically cleaned up even if still in use
+});
+
+// Configure timeout parameter for a single send (higher priority than global configuration)
+try {
+    const response = await session.send(
+        { command: "queryStatus" },
+        { timeout: 3000 } // Set 3 seconds timeout for this request only
+    );
+    console.log("Received reply:", response);
+} catch (error) {
+    if (error instanceof SessionTimeoutError) {
+        console.error("Request timeout");
+    }
+}
+```
+
+**How Timeout Mechanism Works**:
+
+-   After sending a message, the system starts a timer. If no response is received within `sessionTimeout`, a `SessionTimeoutError` is thrown
+-   The system periodically checks all sessions (default every `sessionTimeout/2` time)
+-   If a session's last activity time exceeds `sessionMaxLife`, the session is automatically terminated and cleaned up
+-   When using the retry mechanism, timeout detection is paused until all retries are completed
+
+### Port
+
+In `PSession`, `Port` is an important concept, especially suitable for one-to-many and many-to-many communication scenarios:
+
+1. **Purpose of Ports**:
+
+    - Ports are used to distinguish different communication endpoints (such as different devices, services, or clients)
+    - Each port maintains its own collection of sessions, allowing session IDs from different ports to be managed independently
+    - The port mechanism enables the system to establish sessions with multiple endpoints simultaneously without confusing session states
+
+2. **One-to-Many Communication Scenarios**:
+
+    - When an application needs to communicate with multiple devices simultaneously, it can create a port for each device
+    - Each port can independently manage sessions with the corresponding device, using its own session ID space
+    - Example: A control center connecting to multiple smart home devices, each device using an independent port
+
+3. **Many-to-Many Communication Scenarios**:
+
+    - In complex systems, multiple services need to communicate with multiple clients
+    - The port mechanism allows the system to create independent session management spaces for each communication relationship
+    - Example: In a microservice architecture, Service A needs to communicate simultaneously with Services B, C, and D
+
+Example below:
+
+### Socket Server Example
+
+Here's a simple example of a Socket server using PSession, showing how to manage sessions for multiple clients:
+
+```typescript
+import { SessionManager } from "psession";
+import * as net from "net";
+
+// Create session manager
+const manager = new SessionManager({
+    sender: (message) => {
+        // Send message to client
+        const client = message.client;
+        if (client && !client.destroyed) {
+            client.write(JSON.stringify(message));
+        }
+    },
+    sessionTimeout: 10000, // 10 seconds timeout
+});
+
+// Create TCP server
+const server = net.createServer((client) => {
+    console.log("Client connected", client.remoteAddress);
+
+    // Create a port for each client
+    const portName = `client_${client.remoteAddress}:${client.remotePort}`;
+    const port = manager.createPort(portName, {
+        sender: (message) => {
+            // Send message to specific client
+            if (!client.destroyed) {
+                client.write(JSON.stringify(message));
+            }
+        },
+    });
+
+    // Handle client messages
+    client.on("data", (data) => {
+        try {
+            const message = JSON.parse(data.toString());
+            message.client = client; // Attach client reference
+
+            // If it's a session message, pass it to the session manager
+            if (manager.isSession(message)) {
+                const session = manager.getSession(message, portName);
+                if (session) {
+                    session.next(message);
+                }
+            } else {
+                // Handle non-session messages
+                console.log("Received regular message:", message);
+            }
+        } catch (error) {
+            console.error("Message parsing error:", error);
+        }
+    });
+
+    // Clean up resources when client disconnects
+    client.on("end", () => {
+        console.log("Client disconnected", client.remoteAddress);
+        port.destroy();
+    });
+});
+
+// Start server
+server.listen(3000, () => {
+    console.log("Server started, listening on port 3000");
+});
+
+// Example: Handle client commands
+manager.on("session:create", (session) => {
+    console.log("New session created:", session.id);
+
+    // Set session handler function
+    session.on("next", async (message) => {
+        console.log("Received session message:", message);
+
+        // Simulate command processing
+        if (message.command === "getTime") {
+            await session.send({
+                status: "success",
+                time: new Date().toISOString(),
+            });
+        }
+    });
+});
+```
+
+This example demonstrates how to:
+
+1. Create an independent port for each connected client
+2. Use the session manager to handle client messages
+3. Implement basic command processing logic
+4. Manage session lifecycle and resource cleanup
+
+## Error Handling
+
+`PSession` provides several error types to help handle different exception situations:
+
+-   `SessionTimeoutError`: Session timeout error
+-   `SessionCancelError`: Session cancelled error
+-   `SessionInvalidError`: Invalid session error
+-   `SessionAbortError`: Session aborted error
+
+```typescript
+import {
+    SessionTimeoutError,
+    SessionCancelError,
+    SessionInvalidError,
+    SessionAbortError,
+} from "psession";
+
+try {
+    const response = await session.send({ command: "query" });
+} catch (error) {
+    if (error instanceof SessionTimeoutError) {
+        console.error("Session timeout");
+    } else if (error instanceof SessionCancelError) {
+        console.error("Session cancelled");
+    } else if (error instanceof SessionInvalidError) {
+        console.error("Invalid session");
+    } else if (error instanceof SessionAbortError) {
+        console.error("Session aborted");
+    } else {
+        console.error("Unknown error:", error);
+    }
+}
+```
+
+## Notes
+
+1. Always call the `session.end()` method to release resources after using a session
+2. Set appropriate `sessionTimeout` and `sessionMaxLife` parameters to avoid resource waste
+3. When handling received messages, ensure correct calling of the `session.next(message)` method
+
+## License
+
+`MIT`
+
+[Open Source Recommendations](https://zhangfisher.github.io/repos/)bash
+npm install psession
+yarn add psession
+pnpm add psession
+bun add psession
+
+````
+
+## Guide
+
+### Session Principles
+
+The core of `PSession` is a session management mechanism based on session IDs (`sid`), which tracks and manages multiple concurrent sessions by embedding unique session identifiers in messages.
+
+1. **SID Generation and Assignment**:
+
+    - Each new session is automatically assigned a unique numeric `ID`
+    - `SID` starts from `1` and increments until it reaches the configured maximum session count (default `65535`)
+    - When `SID` is exhausted, the system recycles the earliest session ID according to the configured strategy
+
+2. **Message Marking Mechanism**:
+
+    - When sending a message, the system automatically adds a session `SID` field to the message object (default field name is `sid`)
+    - The receiver identifies and routes messages to the corresponding session handler by checking the `SID` field in the message
+    - This mechanism allows messages from multiple sessions to be transmitted in the same channel without confusion
+
+3. **Session Lifecycle Management**:
+    - Session creation: Create a new session via the `createSession()` method
+    - Session activity: Update the session's last activity time each time a message is sent
+    - Session termination: Actively end the session via the `session.end()` method, or wait for the system to automatically clean up timed-out sessions
+
+**SID Configuration**
+
+```typescript
+// Customize session ID field name
+const manager = new SessionManager({
+    sender: (message) => {
+        /* Sending logic */
+    },
+    sessionIdName: "sessionId", // Change default 'sid' to 'sessionId'
+    maxSessionCount: 1000, // Set maximum session count to 1000 (default 65535)
+    // Custom session overflow handling strategy
+    onSessionOverflow: (port) => {
+        // Return the session ID to be recycled
+        // Default returns 1, i.e., recycle the earliest created session
+        return 1;
+    },
+});
+````
+
+### Creating a Session Manager
+
+```typescript
+import { SessionManager } from "psession";
+
+// Create session manager
+const manager = new SessionManager({
+    // Function to send messages
+    sender: (message) => {
+        // Implement message sending logic
+        console.log("Sending message:", message);
+        // For example: socket.send(JSON.stringify(message));
+    },
+    // Optional configuration
+    sessionTimeout: 5000, // Session timeout, default 60000ms (1 minute)
+    sessionMaxLife: 600000, // Maximum session lifecycle, default 600000ms (10 minutes)
+    sessionIdName: "sid", // Session ID field name, default 'sid'
+    maxSessionCount: 255, // Maximum session count, default 65535
+});
+```
+
+### Creating and Using Sessions
+
+```typescript
+// Create a session
+const session = manager.createSession("default");
+
+// Send message and wait for reply
+try {
+    const response = await session.send({ command: "turnOnLight" });
+    console.log("Received reply:", response);
+
+    // Can continue sending messages in the same session
+    if (response.status === "needPassword") {
+        const result = await session.send({ password: "123456" });
+        console.log("Verification result:", result);
+    }
+} catch (error) {
+    if (error instanceof SessionTimeoutError) {
+        console.error("Session timeout");
+    }
+} finally {
+    // Remember to call end method to release resources after session ends
+    session.end();
+}
+```
+
+### Handling Session Messages
+
+**Important**: When receiving messages from remote endpoints, you need to use `manager.isSession(message)` to determine if it's a session message. If it is, get the corresponding session via `manager.getSession(message, message.from)` and then call `session.next(message)` to pass the message to the session handler.
+
+```typescript
+// In message receiving handler function
+function onMessage(message) {
+    // Check if it's a session message
+    if (manager.isSession(message)) {
+        // Get the corresponding session
+        const session = manager.getSession(message, message.from);
+        if (session) {
+            // Pass the message to session handler
+            session.next(message);
+        }
+    } else {
+        // Handle non-session messages
+        console.log("Received regular message:", message);
+    }
+}
+```
+
+### Retry Mechanism
+
+`PSession` has a built-in retry mechanism that can be configured using the `retryCount` and `retryInterval` parameters of the `send` method.
+
+```typescript
+import { SessionTimeoutError } from "psession";
+
+// Use built-in retry mechanism to send messages
+async function sendWithRetry() {
+    const session = manager.createSession("device1");
+
+    try {
+        // Set retry parameters directly in the send method
+        const response = await session.send(
+            { command: "queryStatus" },
+            {
+                retryCount: 3, // Retry 3 times (4 times total)
+                retryInterval: 500, // 500ms interval between retries
+            }
+        );
+        console.log("Received reply:", response);
+    } catch (error) {
+        if (error instanceof SessionTimeoutError) {
+            console.error("Still timed out after multiple retries");
+        } else {
+            console.error("Error occurred:", error);
+        }
+    } finally {
+        session.end();
+    }
+}
+```
+
+### Timeout Mechanism
+
+`PSession` provides two timeout mechanisms to manage session lifecycles:
+
+1. **Session Timeout (sessionTimeout)**: Controls the maximum time to wait for a response after sending a message
+2. **Session Maximum Lifetime (sessionMaxLife)**: Controls the maximum survival time of the entire session object
+
+```typescript
+// Configure timeout parameters when creating session manager
+const manager = new SessionManager({
+    sender: (message) => {
+        /* Sending logic */
+    },
+    sessionTimeout: 5000, // Session will timeout if no response is received after 5 seconds
+    sessionMaxLife: 600000, // After 10 minutes, the session will be automatically cleaned up even if still in use
+});
+
+// Configure timeout parameter for a single send (higher priority than global configuration)
+try {
+    const response = await session.send(
+        { command: "queryStatus" },
+        { timeout: 3000 } // Set 3 seconds timeout for this request only
+    );
+    console.log("Received reply:", response);
+} catch (error) {
+    if (error instanceof SessionTimeoutError) {
+        console.error("Request timeout");
+    }
+}
+```
+
+**How Timeout Mechanism Works**:
+
+-   After sending a message, the system starts a timer. If no response is received within `sessionTimeout`, a `SessionTimeoutError` is thrown
+-   The system periodically checks all sessions (default every `sessionTimeout/2` time)
+-   If a session's last activity time exceeds `sessionMaxLife`, the session is automatically terminated and cleaned up
+-   When using the retry mechanism, timeout detection is paused until all retries are completed
+
+### Port
+
+In `PSession`, `Port` is an important concept, especially suitable for one-to-many and many-to-many communication scenarios:
+
+1. **Purpose of Ports**:
+
+    - Ports are used to distinguish different communication endpoints (such as different devices, services, or clients)
+    - Each port maintains its own collection of sessions, allowing session IDs from different ports to be managed independently
+    - The port mechanism enables the system to establish sessions with multiple endpoints simultaneously without confusing session states
+
+2. **One-to-Many Communication Scenarios**:
+
+    - When an application needs to communicate with multiple devices simultaneously, it can create a port for each device
+    - Each port can independently manage sessions with the corresponding device, using its own session ID space
+    - Example: A control center connecting to multiple smart home devices, each device using an independent port
+
+3. **Many-to-Many Communication Scenarios**:
+
+    - In complex systems, multiple services need to communicate with multiple clients
+    - The port mechanism allows the system to create independent session management spaces for each communication relationship
+    - Example: In a microservice architecture, Service A needs to communicate simultaneously with Services B, C, and D
+
+Example below:
+
+### Socket Server Example
+
+Here's a simple example of a Socket server using PSession, showing how to manage sessions for multiple clients:
+
+```typescript
+import { SessionManager } from "psession";
+import * as net from "net";
+
+// Create session manager
+const manager = new SessionManager({
+    sender: (message) => {
+        // Send message to client
+        const client = message.client;
+        if (client && !client.destroyed) {
+            client.write(JSON.stringify(message));
+        }
+    },
+    sessionTimeout: 10000, // 10 seconds timeout
+});
+
+// Create TCP server
+const server = net.createServer((client) => {
+    console.log("Client connected", client.remoteAddress);
+
+    // Create a port for each client
+    const portName = `client_${client.remoteAddress}:${client.remotePort}`;
+    const port = manager.createPort(portName, {
+        sender: (message) => {
+            // Send message to specific client
+            if (!client.destroyed) {
+                client.write(JSON.stringify(message));
+            }
+        },
+    });
+
+    // Handle client messages
+    client.on("data", (data) => {
+        try {
+            const message = JSON.parse(data.toString());
+            message.client = client; // Attach client reference
+
+            // If it's a session message, pass it to the session manager
+            if (manager.isSession(message)) {
+                const session = manager.getSession(message, portName);
+                if (session) {
+                    session.next(message);
+                }
+            } else {
+                // Handle non-session messages
+                console.log("Received regular message:", message);
+            }
+        } catch (error) {
+            console.error("Message parsing error:", error);
+        }
+    });
+
+    // Clean up resources when client disconnects
+    client.on("end", () => {
+        console.log("Client disconnected", client.remoteAddress);
+        port.destroy();
+    });
+});
+
+// Start server
+server.listen(3000, () => {
+    console.log("Server started, listening on port 3000");
+});
+
+// Example: Handle client commands
+manager.on("session:create", (session) => {
+    console.log("New session created:", session.id);
+
+    // Set session handler function
+    session.on("next", async (message) => {
+        console.log("Received session message:", message);
+
+        // Simulate command processing
+        if (message.command === "getTime") {
+            await session.send({
+                status: "success",
+                time: new Date().toISOString(),
+            });
+        }
+    });
+});
+```
+
+This example demonstrates how to:
+
+1. Create an independent port for each connected client
+2. Use the session manager to handle client messages
+3. Implement basic command processing logic
+4. Manage session lifecycle and resource cleanup
+
+## Error Handling
+
+`PSession` provides several error types to help handle different exception situations:
+
+-   `SessionTimeoutError`: Session timeout error
+-   `SessionCancelError`: Session cancelled error
+-   `SessionInvalidError`: Invalid session error
+-   `SessionAbortError`: Session aborted error
+
+```typescript
+import {
+    SessionTimeoutError,
+    SessionCancelError,
+    SessionInvalidError,
+    SessionAbortError,
+} from "psession";
+
+try {
+    const response = await session.send({ command: "query" });
+} catch (error) {
+    if (error instanceof SessionTimeoutError) {
+        console.error("Session timeout");
+    } else if (error instanceof SessionCancelError) {
+        console.error("Session cancelled");
+    } else if (error instanceof SessionInvalidError) {
+        console.error("Invalid session");
+    } else if (error instanceof SessionAbortError) {
+        console.error("Session aborted");
+    } else {
+        console.error("Unknown error:", error);
+    }
+}
+```
+
+## Notes
+
+1. Always call the `session.end()` method to release resources after using a session
+2. Set appropriate `sessionTimeout` and `sessionMaxLife` parameters to avoid resource waste
+3. When handling received messages, ensure correct calling of the `session.next(message)` method
+
+## License
+
+`MIT`
+
+[Open Source Recommendations](https://zhangfisher.github.io/repos/)
+
+## Quick Start - WebSocket Example
+
+Below is an example of a server and client implementation using WebSocket, demonstrating how to use PSession for session management:
+
+### WebSocket Server Side
+
+````
+
+## Guide
+
+### Session Principles
+
+The core of `PSession` is a session management mechanism based on session IDs (`sid`), which tracks and manages multiple concurrent sessions by embedding unique session identifiers in messages.
+
+1. **SID Generation and Assignment**:
+
+    - Each new session is automatically assigned a unique numeric `ID`
+    - `SID` starts from `1` and increments until it reaches the configured maximum session count (default `65535`)
+    - When `SID` is exhausted, the system recycles the earliest session ID according to the configured strategy
+
+2. **Message Marking Mechanism**:
+
+    - When sending a message, the system automatically adds a session `SID` field to the message object (default field name is `sid`)
+    - The receiver identifies and routes messages to the corresponding session handler by checking the `SID` field in the message
+    - This mechanism allows messages from multiple sessions to be transmitted in the same channel without confusion
+
+3. **Session Lifecycle Management**:
+    - Session creation: Create a new session via the `createSession()` method
+    - Session activity: Update the session's last activity time each time a message is sent
+    - Session termination: Actively end the session via the `session.end()` method, or wait for the system to automatically clean up timed-out sessions
+
+**SID Configuration**
+
+```typescript
+// Customize session ID field name
+const manager = new SessionManager({
+    sender: (message) => {
+        /* Sending logic */
+    },
+    sessionIdName: "sessionId", // Change default 'sid' to 'sessionId'
+    maxSessionCount: 1000, // Set maximum session count to 1000 (default 65535)
+    // Custom session overflow handling strategy
+    onSessionOverflow: (port) => {
+        // Return the session ID to be recycled
+        // Default returns 1, i.e., recycle the earliest created session
+        return 1;
+    },
+});
+````
+
+### Creating a Session Manager
+
+```typescript
+import { SessionManager } from "psession";
+
+// Create session manager
+const manager = new SessionManager({
+    // Function to send messages
+    sender: (message) => {
+        // Implement message sending logic
+        console.log("Sending message:", message);
+        // For example: socket.send(JSON.stringify(message));
+    },
+    // Optional configuration
+    sessionTimeout: 5000, // Session timeout, default 60000ms (1 minute)
+    sessionMaxLife: 600000, // Maximum session lifecycle, default 600000ms (10 minutes)
+    sessionIdName: "sid", // Session ID field name, default 'sid'
+    maxSessionCount: 255, // Maximum session count, default 65535
+});
+```
+
+### Creating and Using Sessions
+
+```typescript
+// Create a session
+const session = manager.createSession("default");
+
+// Send message and wait for reply
+try {
+    const response = await session.send({ command: "turnOnLight" });
+    console.log("Received reply:", response);
+
+    // Can continue sending messages in the same session
+    if (response.status === "needPassword") {
+        const result = await session.send({ password: "123456" });
+        console.log("Verification result:", result);
+    }
+} catch (error) {
+    if (error instanceof SessionTimeoutError) {
+        console.error("Session timeout");
+    }
+} finally {
+    // Remember to call end method to release resources after session ends
+    session.end();
+}
+```
+
+### Handling Session Messages
+
+**Important**: When receiving messages from remote endpoints, you need to use `manager.isSession(message)` to determine if it's a session message. If it is, get the corresponding session via `manager.getSession(message, message.from)` and then call `session.next(message)` to pass the message to the session handler.
+
+```typescript
+// In message receiving handler function
+function onMessage(message) {
+    // Check if it's a session message
+    if (manager.isSession(message)) {
+        // Get the corresponding session
+        const session = manager.getSession(message, message.from);
+        if (session) {
+            // Pass the message to session handler
+            session.next(message);
+        }
+    } else {
+        // Handle non-session messages
+        console.log("Received regular message:", message);
+    }
+}
+```
+
+### Retry Mechanism
+
+`PSession` has a built-in retry mechanism that can be configured using the `retryCount` and `retryInterval` parameters of the `send` method.
+
+```typescript
+import { SessionTimeoutError } from "psession";
+
+// Use built-in retry mechanism to send messages
+async function sendWithRetry() {
+    const session = manager.createSession("device1");
+
+    try {
+        // Set retry parameters directly in the send method
+        const response = await session.send(
+            { command: "queryStatus" },
+            {
+                retryCount: 3, // Retry 3 times (4 times total)
+                retryInterval: 500, // 500ms interval between retries
+            }
+        );
+        console.log("Received reply:", response);
+    } catch (error) {
+        if (error instanceof SessionTimeoutError) {
+            console.error("Still timed out after multiple retries");
+        } else {
+            console.error("Error occurred:", error);
+        }
+    } finally {
+        session.end();
+    }
+}
+```
+
+### Timeout Mechanism
+
+`PSession` provides two timeout mechanisms to manage session lifecycles:
+
+1. **Session Timeout (sessionTimeout)**: Controls the maximum time to wait for a response after sending a message
+2. **Session Maximum Lifetime (sessionMaxLife)**: Controls the maximum survival time of the entire session object
+
+```typescript
+// Configure timeout parameters when creating session manager
+const manager = new SessionManager({
+    sender: (message) => {
+        /* Sending logic */
+    },
+    sessionTimeout: 5000, // Session will timeout if no response is received after 5 seconds
+    sessionMaxLife: 600000, // After 10 minutes, the session will be automatically cleaned up even if still in use
+});
+
+// Configure timeout parameter for a single send (higher priority than global configuration)
+try {
+    const response = await session.send(
+        { command: "queryStatus" },
+        { timeout: 3000 } // Set 3 seconds timeout for this request only
+    );
+    console.log("Received reply:", response);
+} catch (error) {
+    if (error instanceof SessionTimeoutError) {
+        console.error("Request timeout");
+    }
+}
+```
+
+**How Timeout Mechanism Works**:
+
+-   After sending a message, the system starts a timer. If no response is received within `sessionTimeout`, a `SessionTimeoutError` is thrown
+-   The system periodically checks all sessions (default every `sessionTimeout/2` time)
+-   If a session's last activity time exceeds `sessionMaxLife`, the session is automatically terminated and cleaned up
+-   When using the retry mechanism, timeout detection is paused until all retries are completed
+
+### Port
+
+In `PSession`, `Port` is an important concept, especially suitable for one-to-many and many-to-many communication scenarios:
+
+1. **Purpose of Ports**:
+
+    - Ports are used to distinguish different communication endpoints (such as different devices, services, or clients)
+    - Each port maintains its own collection of sessions, allowing session IDs from different ports to be managed independently
+    - The port mechanism enables the system to establish sessions with multiple endpoints simultaneously without confusing session states
+
+2. **One-to-Many Communication Scenarios**:
+
+    - When an application needs to communicate with multiple devices simultaneously, it can create a port for each device
+    - Each port can independently manage sessions with the corresponding device, using its own session ID space
+    - Example: A control center connecting to multiple smart home devices, each device using an independent port
+
+3. **Many-to-Many Communication Scenarios**:
+
+    - In complex systems, multiple services need to communicate with multiple clients
+    - The port mechanism allows the system to create independent session management spaces for each communication relationship
+    - Example: In a microservice architecture, Service A needs to communicate simultaneously with Services B, C, and D
+
+Example below:
+
+### Socket Server Example
+
+Here's a simple example of a Socket server using PSession, showing how to manage sessions for multiple clients:
+
+```typescript
+import { SessionManager } from "psession";
+import * as net from "net";
+
+// Create session manager
+const manager = new SessionManager({
+    sender: (message) => {
+        // Send message to client
+        const client = message.client;
+        if (client && !client.destroyed) {
+            client.write(JSON.stringify(message));
+        }
+    },
+    sessionTimeout: 10000, // 10 seconds timeout
+});
+
+// Create TCP server
+const server = net.createServer((client) => {
+    console.log("Client connected", client.remoteAddress);
+
+    // Create a port for each client
+    const portName = `client_${client.remoteAddress}:${client.remotePort}`;
+    const port = manager.createPort(portName, {
+        sender: (message) => {
+            // Send message to specific client
+            if (!client.destroyed) {
+                client.write(JSON.stringify(message));
+            }
+        },
+    });
+
+    // Handle client messages
+    client.on("data", (data) => {
+        try {
+            const message = JSON.parse(data.toString());
+            message.client = client; // Attach client reference
+
+            // If it's a session message, pass it to the session manager
+            if (manager.isSession(message)) {
+                const session = manager.getSession(message, portName);
+                if (session) {
+                    session.next(message);
+                }
+            } else {
+                // Handle non-session messages
+                console.log("Received regular message:", message);
+            }
+        } catch (error) {
+            console.error("Message parsing error:", error);
+        }
+    });
+
+    // Clean up resources when client disconnects
+    client.on("end", () => {
+        console.log("Client disconnected", client.remoteAddress);
+        port.destroy();
+    });
+});
+
+// Start server
+server.listen(3000, () => {
+    console.log("Server started, listening on port 3000");
+});
+
+// Example: Handle client commands
+manager.on("session:create", (session) => {
+    console.log("New session created:", session.id);
+
+    // Set session handler function
+    session.on("next", async (message) => {
+        console.log("Received session message:", message);
+
+        // Simulate command processing
+        if (message.command === "getTime") {
+            await session.send({
+                status: "success",
+                time: new Date().toISOString(),
+            });
+        }
+    });
+});
+```
+
+This example demonstrates how to:
+
+1. Create an independent port for each connected client
+2. Use the session manager to handle client messages
+3. Implement basic command processing logic
+4. Manage session lifecycle and resource cleanup
+
+## Error Handling
+
+`PSession` provides several error types to help handle different exception situations:
+
+-   `SessionTimeoutError`: Session timeout error
+-   `SessionCancelError`: Session cancelled error
+-   `SessionInvalidError`: Invalid session error
+-   `SessionAbortError`: Session aborted error
+
+```typescript
+import {
+    SessionTimeoutError,
+    SessionCancelError,
+    SessionInvalidError,
+    SessionAbortError,
+} from "psession";
+
+try {
+    const response = await session.send({ command: "query" });
+} catch (error) {
+    if (error instanceof SessionTimeoutError) {
+        console.error("Session timeout");
+    } else if (error instanceof SessionCancelError) {
+        console.error("Session cancelled");
+    } else if (error instanceof SessionInvalidError) {
+        console.error("Invalid session");
+    } else if (error instanceof SessionAbortError) {
+        console.error("Session aborted");
+    } else {
+        console.error("Unknown error:", error);
+    }
+}
+```
+
+## Notes
+
+1. Always call the `session.end()` method to release resources after using a session
+2. Set appropriate `sessionTimeout` and `sessionMaxLife` parameters to avoid resource waste
+3. When handling received messages, ensure correct calling of the `session.next(message)` method
+
+## License
+
+`MIT`
+
+[Open Source Recommendations](https://zhangfisher.github.io/repos/)typescript
+import { SessionManager } from "psession";
+import { WebSocketServer } from "ws";
+
+// Create WebSocket server
+const wss = new WebSocketServer({ port: 8080 });
+console.log("WebSocket server started, listening on port 8080");
+
+// Create session manager
+const manager = new SessionManager({
+sender: (message) => {
+// This function won't be used directly as we'll create independent ports for each client
+console.log("Default sender should not be called");
+},
+sessionTimeout: 10000, // 10 seconds timeout
+});
+
+// Handle new WebSocket connections
+wss.on("connection", (ws, req) => {
+const clientId = req.socket.remoteAddress + ":" + req.socket.remotePort;
+console.log(`Client connected: ${clientId}`);
+
+    // Create an independent port for each client
+    const port = manager.createPort(clientId, {
+        sender: (message) => {
+            // Send message to specific client
+            if (ws.readyState === ws.OPEN) {
+                ws.send(JSON.stringify(message));
+            }
+        },
+    });
+
+    // Handle messages from client
+    ws.on("message", (data) => {
+        try {
+            const message = JSON.parse(data.toString());
+
+            // Check if it's a session message
+            if (manager.isSession(message)) {
+                const session = manager.getSession(message, clientId);
+                if (session) {
+                    // Pass the message to the corresponding session
+                    session.next(message);
+                }
+            } else {
+                // Handle non-session messages
+                console.log(`Received regular message from ${clientId}:`, message);
+
+                // Example: Handle client request, create new session
+                if (message.type === "command") {
+                    // Create new session to handle command
+                    const session = manager.createSession(clientId);
+
+                    // Send session message and wait for response
+                    session
+                        .send({
+                            type: "response",
+                            command: message.command,
+                            status: "processing",
+                        })
+                        .then(() => {
+                            // Simulate command processing
+                            setTimeout(() => {
+                                session.send({
+                                    type: "response",
+                                    command: message.command,
+                                    status: "completed",
+                                    result: `Command "${message.command}" has been executed`,
+                                });
+
+                                // End session
+                                session.end();
+                            }, 1000);
+                        });
+                }
+            }
+        } catch (error) {
+            console.error("Message parsing error:", error);
+        }
+    });
+
+    // Handle connection close
+    ws.on("close", () => {
+        console.log(`Client disconnected: ${clientId}`);
+        // Destroy all sessions for this client
+        port.destroy();
+    });
+
+});
+
+// Listen for session creation events
+manager.on("session:create", (session) => {
+console.log(`New session created: ${session.id} (port: ${session.port})`);
+});
+
+````
+
+## Guide
+
+### Session Principles
+
+The core of `PSession` is a session management mechanism based on session IDs (`sid`), which tracks and manages multiple concurrent sessions by embedding unique session identifiers in messages.
+
+1. **SID Generation and Assignment**:
+
+    - Each new session is automatically assigned a unique numeric `ID`
+    - `SID` starts from `1` and increments until it reaches the configured maximum session count (default `65535`)
+    - When `SID` is exhausted, the system recycles the earliest session ID according to the configured strategy
+
+2. **Message Marking Mechanism**:
+
+    - When sending a message, the system automatically adds a session `SID` field to the message object (default field name is `sid`)
+    - The receiver identifies and routes messages to the corresponding session handler by checking the `SID` field in the message
+    - This mechanism allows messages from multiple sessions to be transmitted in the same channel without confusion
+
+3. **Session Lifecycle Management**:
+    - Session creation: Create a new session via the `createSession()` method
+    - Session activity: Update the session's last activity time each time a message is sent
+    - Session termination: Actively end the session via the `session.end()` method, or wait for the system to automatically clean up timed-out sessions
+
+**SID Configuration**
+
+```typescript
+// Customize session ID field name
+const manager = new SessionManager({
+    sender: (message) => {
+        /* Sending logic */
+    },
+    sessionIdName: "sessionId", // Change default 'sid' to 'sessionId'
+    maxSessionCount: 1000, // Set maximum session count to 1000 (default 65535)
+    // Custom session overflow handling strategy
+    onSessionOverflow: (port) => {
+        // Return the session ID to be recycled
+        // Default returns 1, i.e., recycle the earliest created session
+        return 1;
+    },
+});
+````
+
+### Creating a Session Manager
+
+```typescript
+import { SessionManager } from "psession";
+
+// Create session manager
+const manager = new SessionManager({
+    // Function to send messages
+    sender: (message) => {
+        // Implement message sending logic
+        console.log("Sending message:", message);
+        // For example: socket.send(JSON.stringify(message));
+    },
+    // Optional configuration
+    sessionTimeout: 5000, // Session timeout, default 60000ms (1 minute)
+    sessionMaxLife: 600000, // Maximum session lifecycle, default 600000ms (10 minutes)
+    sessionIdName: "sid", // Session ID field name, default 'sid'
+    maxSessionCount: 255, // Maximum session count, default 65535
+});
+```
+
+### Creating and Using Sessions
+
+```typescript
+// Create a session
+const session = manager.createSession("default");
+
+// Send message and wait for reply
+try {
+    const response = await session.send({ command: "turnOnLight" });
+    console.log("Received reply:", response);
+
+    // Can continue sending messages in the same session
+    if (response.status === "needPassword") {
+        const result = await session.send({ password: "123456" });
+        console.log("Verification result:", result);
+    }
+} catch (error) {
+    if (error instanceof SessionTimeoutError) {
+        console.error("Session timeout");
+    }
+} finally {
+    // Remember to call end method to release resources after session ends
+    session.end();
+}
+```
+
+### Handling Session Messages
+
+**Important**: When receiving messages from remote endpoints, you need to use `manager.isSession(message)` to determine if it's a session message. If it is, get the corresponding session via `manager.getSession(message, message.from)` and then call `session.next(message)` to pass the message to the session handler.
+
+```typescript
+// In message receiving handler function
+function onMessage(message) {
+    // Check if it's a session message
+    if (manager.isSession(message)) {
+        // Get the corresponding session
+        const session = manager.getSession(message, message.from);
+        if (session) {
+            // Pass the message to session handler
+            session.next(message);
+        }
+    } else {
+        // Handle non-session messages
+        console.log("Received regular message:", message);
+    }
+}
+```
+
+### Retry Mechanism
+
+`PSession` has a built-in retry mechanism that can be configured using the `retryCount` and `retryInterval` parameters of the `send` method.
+
+```typescript
+import { SessionTimeoutError } from "psession";
+
+// Use built-in retry mechanism to send messages
+async function sendWithRetry() {
+    const session = manager.createSession("device1");
+
+    try {
+        // Set retry parameters directly in the send method
+        const response = await session.send(
+            { command: "queryStatus" },
+            {
+                retryCount: 3, // Retry 3 times (4 times total)
+                retryInterval: 500, // 500ms interval between retries
+            }
+        );
+        console.log("Received reply:", response);
+    } catch (error) {
+        if (error instanceof SessionTimeoutError) {
+            console.error("Still timed out after multiple retries");
+        } else {
+            console.error("Error occurred:", error);
+        }
+    } finally {
+        session.end();
+    }
+}
+```
+
+### Timeout Mechanism
+
+`PSession` provides two timeout mechanisms to manage session lifecycles:
+
+1. **Session Timeout (sessionTimeout)**: Controls the maximum time to wait for a response after sending a message
+2. **Session Maximum Lifetime (sessionMaxLife)**: Controls the maximum survival time of the entire session object
+
+```typescript
+// Configure timeout parameters when creating session manager
+const manager = new SessionManager({
+    sender: (message) => {
+        /* Sending logic */
+    },
+    sessionTimeout: 5000, // Session will timeout if no response is received after 5 seconds
+    sessionMaxLife: 600000, // After 10 minutes, the session will be automatically cleaned up even if still in use
+});
+
+// Configure timeout parameter for a single send (higher priority than global configuration)
+try {
+    const response = await session.send(
+        { command: "queryStatus" },
+        { timeout: 3000 } // Set 3 seconds timeout for this request only
+    );
+    console.log("Received reply:", response);
+} catch (error) {
+    if (error instanceof SessionTimeoutError) {
+        console.error("Request timeout");
+    }
+}
+```
+
+**How Timeout Mechanism Works**:
+
+-   After sending a message, the system starts a timer. If no response is received within `sessionTimeout`, a `SessionTimeoutError` is thrown
+-   The system periodically checks all sessions (default every `sessionTimeout/2` time)
+-   If a session's last activity time exceeds `sessionMaxLife`, the session is automatically terminated and cleaned up
+-   When using the retry mechanism, timeout detection is paused until all retries are completed
+
+### Port
+
+In `PSession`, `Port` is an important concept, especially suitable for one-to-many and many-to-many communication scenarios:
+
+1. **Purpose of Ports**:
+
+    - Ports are used to distinguish different communication endpoints (such as different devices, services, or clients)
+    - Each port maintains its own collection of sessions, allowing session IDs from different ports to be managed independently
+    - The port mechanism enables the system to establish sessions with multiple endpoints simultaneously without confusing session states
+
+2. **One-to-Many Communication Scenarios**:
+
+    - When an application needs to communicate with multiple devices simultaneously, it can create a port for each device
+    - Each port can independently manage sessions with the corresponding device, using its own session ID space
+    - Example: A control center connecting to multiple smart home devices, each device using an independent port
+
+3. **Many-to-Many Communication Scenarios**:
+
+    - In complex systems, multiple services need to communicate with multiple clients
+    - The port mechanism allows the system to create independent session management spaces for each communication relationship
+    - Example: In a microservice architecture, Service A needs to communicate simultaneously with Services B, C, and D
+
+Example below:
+
+### Socket Server Example
+
+Here's a simple example of a Socket server using PSession, showing how to manage sessions for multiple clients:
+
+```typescript
+import { SessionManager } from "psession";
+import * as net from "net";
+
+// Create session manager
+const manager = new SessionManager({
+    sender: (message) => {
+        // Send message to client
+        const client = message.client;
+        if (client && !client.destroyed) {
+            client.write(JSON.stringify(message));
+        }
+    },
+    sessionTimeout: 10000, // 10 seconds timeout
+});
+
+// Create TCP server
+const server = net.createServer((client) => {
+    console.log("Client connected", client.remoteAddress);
+
+    // Create a port for each client
+    const portName = `client_${client.remoteAddress}:${client.remotePort}`;
+    const port = manager.createPort(portName, {
+        sender: (message) => {
+            // Send message to specific client
+            if (!client.destroyed) {
+                client.write(JSON.stringify(message));
+            }
+        },
+    });
+
+    // Handle client messages
+    client.on("data", (data) => {
+        try {
+            const message = JSON.parse(data.toString());
+            message.client = client; // Attach client reference
+
+            // If it's a session message, pass it to the session manager
+            if (manager.isSession(message)) {
+                const session = manager.getSession(message, portName);
+                if (session) {
+                    session.next(message);
+                }
+            } else {
+                // Handle non-session messages
+                console.log("Received regular message:", message);
+            }
+        } catch (error) {
+            console.error("Message parsing error:", error);
+        }
+    });
+
+    // Clean up resources when client disconnects
+    client.on("end", () => {
+        console.log("Client disconnected", client.remoteAddress);
+        port.destroy();
+    });
+});
+
+// Start server
+server.listen(3000, () => {
+    console.log("Server started, listening on port 3000");
+});
+
+// Example: Handle client commands
+manager.on("session:create", (session) => {
+    console.log("New session created:", session.id);
+
+    // Set session handler function
+    session.on("next", async (message) => {
+        console.log("Received session message:", message);
+
+        // Simulate command processing
+        if (message.command === "getTime") {
+            await session.send({
+                status: "success",
+                time: new Date().toISOString(),
+            });
+        }
+    });
+});
+```
+
+This example demonstrates how to:
+
+1. Create an independent port for each connected client
+2. Use the session manager to handle client messages
+3. Implement basic command processing logic
+4. Manage session lifecycle and resource cleanup
+
+## Error Handling
+
+`PSession` provides several error types to help handle different exception situations:
+
+-   `SessionTimeoutError`: Session timeout error
+-   `SessionCancelError`: Session cancelled error
+-   `SessionInvalidError`: Invalid session error
+-   `SessionAbortError`: Session aborted error
+
+```typescript
+import {
+    SessionTimeoutError,
+    SessionCancelError,
+    SessionInvalidError,
+    SessionAbortError,
+} from "psession";
+
+try {
+    const response = await session.send({ command: "query" });
+} catch (error) {
+    if (error instanceof SessionTimeoutError) {
+        console.error("Session timeout");
+    } else if (error instanceof SessionCancelError) {
+        console.error("Session cancelled");
+    } else if (error instanceof SessionInvalidError) {
+        console.error("Invalid session");
+    } else if (error instanceof SessionAbortError) {
+        console.error("Session aborted");
+    } else {
+        console.error("Unknown error:", error);
+    }
+}
+```
+
+## Notes
+
+1. Always call the `session.end()` method to release resources after using a session
+2. Set appropriate `sessionTimeout` and `sessionMaxLife` parameters to avoid resource waste
+3. When handling received messages, ensure correct calling of the `session.next(message)` method
+
+## License
+
+`MIT`
+
+[Open Source Recommendations](https://zhangfisher.github.io/repos/)
+
+### WebSocket Client Side
+
+````
+
+## Guide
+
+### Session Principles
+
+The core of `PSession` is a session management mechanism based on session IDs (`sid`), which tracks and manages multiple concurrent sessions by embedding unique session identifiers in messages.
+
+1. **SID Generation and Assignment**:
+
+    - Each new session is automatically assigned a unique numeric `ID`
+    - `SID` starts from `1` and increments until it reaches the configured maximum session count (default `65535`)
+    - When `SID` is exhausted, the system recycles the earliest session ID according to the configured strategy
+
+2. **Message Marking Mechanism**:
+
+    - When sending a message, the system automatically adds a session `SID` field to the message object (default field name is `sid`)
+    - The receiver identifies and routes messages to the corresponding session handler by checking the `SID` field in the message
+    - This mechanism allows messages from multiple sessions to be transmitted in the same channel without confusion
+
+3. **Session Lifecycle Management**:
+    - Session creation: Create a new session via the `createSession()` method
+    - Session activity: Update the session's last activity time each time a message is sent
+    - Session termination: Actively end the session via the `session.end()` method, or wait for the system to automatically clean up timed-out sessions
+
+**SID Configuration**
+
+```typescript
+// Customize session ID field name
+const manager = new SessionManager({
+    sender: (message) => {
+        /* Sending logic */
+    },
+    sessionIdName: "sessionId", // Change default 'sid' to 'sessionId'
+    maxSessionCount: 1000, // Set maximum session count to 1000 (default 65535)
+    // Custom session overflow handling strategy
+    onSessionOverflow: (port) => {
+        // Return the session ID to be recycled
+        // Default returns 1, i.e., recycle the earliest created session
+        return 1;
+    },
+});
+````
+
+### Creating a Session Manager
+
+```typescript
+import { SessionManager } from "psession";
+
+// Create session manager
+const manager = new SessionManager({
+    // Function to send messages
+    sender: (message) => {
+        // Implement message sending logic
+        console.log("Sending message:", message);
+        // For example: socket.send(JSON.stringify(message));
+    },
+    // Optional configuration
+    sessionTimeout: 5000, // Session timeout, default 60000ms (1 minute)
+    sessionMaxLife: 600000, // Maximum session lifecycle, default 600000ms (10 minutes)
+    sessionIdName: "sid", // Session ID field name, default 'sid'
+    maxSessionCount: 255, // Maximum session count, default 65535
+});
+```
+
+### Creating and Using Sessions
+
+```typescript
+// Create a session
+const session = manager.createSession("default");
+
+// Send message and wait for reply
+try {
+    const response = await session.send({ command: "turnOnLight" });
+    console.log("Received reply:", response);
+
+    // Can continue sending messages in the same session
+    if (response.status === "needPassword") {
+        const result = await session.send({ password: "123456" });
+        console.log("Verification result:", result);
+    }
+} catch (error) {
+    if (error instanceof SessionTimeoutError) {
+        console.error("Session timeout");
+    }
+} finally {
+    // Remember to call end method to release resources after session ends
+    session.end();
+}
+```
+
+### Handling Session Messages
+
+**Important**: When receiving messages from remote endpoints, you need to use `manager.isSession(message)` to determine if it's a session message. If it is, get the corresponding session via `manager.getSession(message, message.from)` and then call `session.next(message)` to pass the message to the session handler.
+
+```typescript
+// In message receiving handler function
+function onMessage(message) {
+    // Check if it's a session message
+    if (manager.isSession(message)) {
+        // Get the corresponding session
+        const session = manager.getSession(message, message.from);
+        if (session) {
+            // Pass the message to session handler
+            session.next(message);
+        }
+    } else {
+        // Handle non-session messages
+        console.log("Received regular message:", message);
+    }
+}
+```
+
+### Retry Mechanism
+
+`PSession` has a built-in retry mechanism that can be configured using the `retryCount` and `retryInterval` parameters of the `send` method.
+
+```typescript
+import { SessionTimeoutError } from "psession";
+
+// Use built-in retry mechanism to send messages
+async function sendWithRetry() {
+    const session = manager.createSession("device1");
+
+    try {
+        // Set retry parameters directly in the send method
+        const response = await session.send(
+            { command: "queryStatus" },
+            {
+                retryCount: 3, // Retry 3 times (4 times total)
+                retryInterval: 500, // 500ms interval between retries
+            }
+        );
+        console.log("Received reply:", response);
+    } catch (error) {
+        if (error instanceof SessionTimeoutError) {
+            console.error("Still timed out after multiple retries");
+        } else {
+            console.error("Error occurred:", error);
+        }
+    } finally {
+        session.end();
+    }
+}
+```
+
+### Timeout Mechanism
+
+`PSession` provides two timeout mechanisms to manage session lifecycles:
+
+1. **Session Timeout (sessionTimeout)**: Controls the maximum time to wait for a response after sending a message
+2. **Session Maximum Lifetime (sessionMaxLife)**: Controls the maximum survival time of the entire session object
+
+```typescript
+// Configure timeout parameters when creating session manager
+const manager = new SessionManager({
+    sender: (message) => {
+        /* Sending logic */
+    },
+    sessionTimeout: 5000, // Session will timeout if no response is received after 5 seconds
+    sessionMaxLife: 600000, // After 10 minutes, the session will be automatically cleaned up even if still in use
+});
+
+// Configure timeout parameter for a single send (higher priority than global configuration)
+try {
+    const response = await session.send(
+        { command: "queryStatus" },
+        { timeout: 3000 } // Set 3 seconds timeout for this request only
+    );
+    console.log("Received reply:", response);
+} catch (error) {
+    if (error instanceof SessionTimeoutError) {
+        console.error("Request timeout");
+    }
+}
+```
+
+**How Timeout Mechanism Works**:
+
+-   After sending a message, the system starts a timer. If no response is received within `sessionTimeout`, a `SessionTimeoutError` is thrown
+-   The system periodically checks all sessions (default every `sessionTimeout/2` time)
+-   If a session's last activity time exceeds `sessionMaxLife`, the session is automatically terminated and cleaned up
+-   When using the retry mechanism, timeout detection is paused until all retries are completed
+
+### Port
+
+In `PSession`, `Port` is an important concept, especially suitable for one-to-many and many-to-many communication scenarios:
+
+1. **Purpose of Ports**:
+
+    - Ports are used to distinguish different communication endpoints (such as different devices, services, or clients)
+    - Each port maintains its own collection of sessions, allowing session IDs from different ports to be managed independently
+    - The port mechanism enables the system to establish sessions with multiple endpoints simultaneously without confusing session states
+
+2. **One-to-Many Communication Scenarios**:
+
+    - When an application needs to communicate with multiple devices simultaneously, it can create a port for each device
+    - Each port can independently manage sessions with the corresponding device, using its own session ID space
+    - Example: A control center connecting to multiple smart home devices, each device using an independent port
+
+3. **Many-to-Many Communication Scenarios**:
+
+    - In complex systems, multiple services need to communicate with multiple clients
+    - The port mechanism allows the system to create independent session management spaces for each communication relationship
+    - Example: In a microservice architecture, Service A needs to communicate simultaneously with Services B, C, and D
+
+Example below:
+
+### Socket Server Example
+
+Here's a simple example of a Socket server using PSession, showing how to manage sessions for multiple clients:
+
+```typescript
+import { SessionManager } from "psession";
+import * as net from "net";
+
+// Create session manager
+const manager = new SessionManager({
+    sender: (message) => {
+        // Send message to client
+        const client = message.client;
+        if (client && !client.destroyed) {
+            client.write(JSON.stringify(message));
+        }
+    },
+    sessionTimeout: 10000, // 10 seconds timeout
+});
+
+// Create TCP server
+const server = net.createServer((client) => {
+    console.log("Client connected", client.remoteAddress);
+
+    // Create a port for each client
+    const portName = `client_${client.remoteAddress}:${client.remotePort}`;
+    const port = manager.createPort(portName, {
+        sender: (message) => {
+            // Send message to specific client
+            if (!client.destroyed) {
+                client.write(JSON.stringify(message));
+            }
+        },
+    });
+
+    // Handle client messages
+    client.on("data", (data) => {
+        try {
+            const message = JSON.parse(data.toString());
+            message.client = client; // Attach client reference
+
+            // If it's a session message, pass it to the session manager
+            if (manager.isSession(message)) {
+                const session = manager.getSession(message, portName);
+                if (session) {
+                    session.next(message);
+                }
+            } else {
+                // Handle non-session messages
+                console.log("Received regular message:", message);
+            }
+        } catch (error) {
+            console.error("Message parsing error:", error);
+        }
+    });
+
+    // Clean up resources when client disconnects
+    client.on("end", () => {
+        console.log("Client disconnected", client.remoteAddress);
+        port.destroy();
+    });
+});
+
+// Start server
+server.listen(3000, () => {
+    console.log("Server started, listening on port 3000");
+});
+
+// Example: Handle client commands
+manager.on("session:create", (session) => {
+    console.log("New session created:", session.id);
+
+    // Set session handler function
+    session.on("next", async (message) => {
+        console.log("Received session message:", message);
+
+        // Simulate command processing
+        if (message.command === "getTime") {
+            await session.send({
+                status: "success",
+                time: new Date().toISOString(),
+            });
+        }
+    });
+});
+```
+
+This example demonstrates how to:
+
+1. Create an independent port for each connected client
+2. Use the session manager to handle client messages
+3. Implement basic command processing logic
+4. Manage session lifecycle and resource cleanup
+
+## Error Handling
+
+`PSession` provides several error types to help handle different exception situations:
+
+-   `SessionTimeoutError`: Session timeout error
+-   `SessionCancelError`: Session cancelled error
+-   `SessionInvalidError`: Invalid session error
+-   `SessionAbortError`: Session aborted error
+
+```typescript
+import {
+    SessionTimeoutError,
+    SessionCancelError,
+    SessionInvalidError,
+    SessionAbortError,
+} from "psession";
+
+try {
+    const response = await session.send({ command: "query" });
+} catch (error) {
+    if (error instanceof SessionTimeoutError) {
+        console.error("Session timeout");
+    } else if (error instanceof SessionCancelError) {
+        console.error("Session cancelled");
+    } else if (error instanceof SessionInvalidError) {
+        console.error("Invalid session");
+    } else if (error instanceof SessionAbortError) {
+        console.error("Session aborted");
+    } else {
+        console.error("Unknown error:", error);
+    }
+}
+```
+
+## Notes
+
+1. Always call the `session.end()` method to release resources after using a session
+2. Set appropriate `sessionTimeout` and `sessionMaxLife` parameters to avoid resource waste
+3. When handling received messages, ensure correct calling of the `session.next(message)` method
+
+## License
+
+`MIT`
+
+[Open Source Recommendations](https://zhangfisher.github.io/repos/)typescript
+import { SessionManager } from "psession";
+import WebSocket from "ws";
+
+// Create WebSocket client
+const ws = new WebSocket("ws://localhost:8080");
+
+// Create session manager
+const manager = new SessionManager({
+sender: (message) => {
+// Send message to server
+if (ws.readyState === ws.OPEN) {
+ws.send(JSON.stringify(message));
+} else {
+console.error("WebSocket not connected, cannot send message");
+}
+},
+sessionTimeout: 5000, // 5 seconds timeout
+});
+
+// Handle successful connection
+ws.on("open", () => {
+console.log("Connected to server");
+
+    // Send regular command message
+    ws.send(
+        JSON.stringify({
+            type: "command",
+            command: "getStatus",
+        })
+    );
+
+    // Create session and send message
+    const session = manager.createSession("default");
+
+    // Use session to send message and wait for response
+    session
+        .send({
+            type: "query",
+            query: "getDeviceList",
+        })
+        .then((response) => {
+            console.log("Received session response:", response);
+
+            // Continue sending messages in the same session
+            return session.send({
+                type: "query",
+                query: "getDeviceDetails",
+                deviceId: response.devices[0].id,
+            });
+        })
+        .then((details) => {
+            console.log("Received device details:", details);
+
+            // End session
+            session.end();
+        })
+        .catch((error) => {
+            console.error("Session error:", error);
+            session.end();
+        });
+
+});
+
+// Handle server messages
+ws.on("message", (data) => {
+try {
+const message = JSON.parse(data.toString());
+
+        // Check if it's a session message
+        if (manager.isSession(message)) {
+            const session = manager.getSession(message);
+            if (session) {
+                // Pass the message to the corresponding session
+                session.next(message);
+            }
+        } else {
+            // Handle non-session messages
+            console.log("Received regular server message:", message);
+        }
+    } catch (error) {
+        console.error("Message parsing error:", error);
+    }
+
+});
+
+// Handle connection close
+ws.on("close", () => {
+console.log("Connection to server closed");
+});
+
+// Handle errors
+ws.on("error", (error) => {
+console.error("WebSocket error:", error);
+});
+
+````
+
+## Guide
+
+### Session Principles
+
+The core of `PSession` is a session management mechanism based on session IDs (`sid`), which tracks and manages multiple concurrent sessions by embedding unique session identifiers in messages.
+
+1. **SID Generation and Assignment**:
+
+    - Each new session is automatically assigned a unique numeric `ID`
+    - `SID` starts from `1` and increments until it reaches the configured maximum session count (default `65535`)
+    - When `SID` is exhausted, the system recycles the earliest session ID according to the configured strategy
+
+2. **Message Marking Mechanism**:
+
+    - When sending a message, the system automatically adds a session `SID` field to the message object (default field name is `sid`)
+    - The receiver identifies and routes messages to the corresponding session handler by checking the `SID` field in the message
+    - This mechanism allows messages from multiple sessions to be transmitted in the same channel without confusion
+
+3. **Session Lifecycle Management**:
+    - Session creation: Create a new session via the `createSession()` method
+    - Session activity: Update the session's last activity time each time a message is sent
+    - Session termination: Actively end the session via the `session.end()` method, or wait for the system to automatically clean up timed-out sessions
+
+**SID Configuration**
+
+```typescript
+// Customize session ID field name
+const manager = new SessionManager({
+    sender: (message) => {
+        /* Sending logic */
+    },
+    sessionIdName: "sessionId", // Change default 'sid' to 'sessionId'
+    maxSessionCount: 1000, // Set maximum session count to 1000 (default 65535)
+    // Custom session overflow handling strategy
+    onSessionOverflow: (port) => {
+        // Return the session ID to be recycled
+        // Default returns 1, i.e., recycle the earliest created session
+        return 1;
+    },
+});
+````
+
+### Creating a Session Manager
+
+```typescript
+import { SessionManager } from "psession";
+
+// Create session manager
+const manager = new SessionManager({
+    // Function to send messages
+    sender: (message) => {
+        // Implement message sending logic
+        console.log("Sending message:", message);
+        // For example: socket.send(JSON.stringify(message));
+    },
+    // Optional configuration
+    sessionTimeout: 5000, // Session timeout, default 60000ms (1 minute)
+    sessionMaxLife: 600000, // Maximum session lifecycle, default 600000ms (10 minutes)
+    sessionIdName: "sid", // Session ID field name, default 'sid'
+    maxSessionCount: 255, // Maximum session count, default 65535
+});
+```
+
+### Creating and Using Sessions
+
+```typescript
+// Create a session
+const session = manager.createSession("default");
+
+// Send message and wait for reply
+try {
+    const response = await session.send({ command: "turnOnLight" });
+    console.log("Received reply:", response);
+
+    // Can continue sending messages in the same session
+    if (response.status === "needPassword") {
+        const result = await session.send({ password: "123456" });
+        console.log("Verification result:", result);
+    }
+} catch (error) {
+    if (error instanceof SessionTimeoutError) {
+        console.error("Session timeout");
+    }
+} finally {
+    // Remember to call end method to release resources after session ends
+    session.end();
+}
+```
+
+### Handling Session Messages
+
+**Important**: When receiving messages from remote endpoints, you need to use `manager.isSession(message)` to determine if it's a session message. If it is, get the corresponding session via `manager.getSession(message, message.from)` and then call `session.next(message)` to pass the message to the session handler.
+
+```typescript
+// In message receiving handler function
+function onMessage(message) {
+    // Check if it's a session message
+    if (manager.isSession(message)) {
+        // Get the corresponding session
+        const session = manager.getSession(message, message.from);
+        if (session) {
+            // Pass the message to session handler
+            session.next(message);
+        }
+    } else {
+        // Handle non-session messages
+        console.log("Received regular message:", message);
+    }
+}
+```
+
+### Retry Mechanism
+
+`PSession` has a built-in retry mechanism that can be configured using the `retryCount` and `retryInterval` parameters of the `send` method.
+
+```typescript
+import { SessionTimeoutError } from "psession";
+
+// Use built-in retry mechanism to send messages
+async function sendWithRetry() {
+    const session = manager.createSession("device1");
+
+    try {
+        // Set retry parameters directly in the send method
+        const response = await session.send(
+            { command: "queryStatus" },
+            {
+                retryCount: 3, // Retry 3 times (4 times total)
+                retryInterval: 500, // 500ms interval between retries
+            }
+        );
+        console.log("Received reply:", response);
+    } catch (error) {
+        if (error instanceof SessionTimeoutError) {
+            console.error("Still timed out after multiple retries");
+        } else {
+            console.error("Error occurred:", error);
+        }
+    } finally {
+        session.end();
+    }
+}
+```
+
+### Timeout Mechanism
+
+`PSession` provides two timeout mechanisms to manage session lifecycles:
+
+1. **Session Timeout (sessionTimeout)**: Controls the maximum time to wait for a response after sending a message
+2. **Session Maximum Lifetime (sessionMaxLife)**: Controls the maximum survival time of the entire session object
+
+```typescript
+// Configure timeout parameters when creating session manager
+const manager = new SessionManager({
+    sender: (message) => {
+        /* Sending logic */
+    },
+    sessionTimeout: 5000, // Session will timeout if no response is received after 5 seconds
+    sessionMaxLife: 600000, // After 10 minutes, the session will be automatically cleaned up even if still in use
+});
+
+// Configure timeout parameter for a single send (higher priority than global configuration)
+try {
+    const response = await session.send(
+        { command: "queryStatus" },
+        { timeout: 3000 } // Set 3 seconds timeout for this request only
+    );
+    console.log("Received reply:", response);
+} catch (error) {
+    if (error instanceof SessionTimeoutError) {
+        console.error("Request timeout");
+    }
+}
+```
+
+**How Timeout Mechanism Works**:
+
+-   After sending a message, the system starts a timer. If no response is received within `sessionTimeout`, a `SessionTimeoutError` is thrown
+-   The system periodically checks all sessions (default every `sessionTimeout/2` time)
+-   If a session's last activity time exceeds `sessionMaxLife`, the session is automatically terminated and cleaned up
+-   When using the retry mechanism, timeout detection is paused until all retries are completed
+
+### Port
+
+In `PSession`, `Port` is an important concept, especially suitable for one-to-many and many-to-many communication scenarios:
+
+1. **Purpose of Ports**:
+
+    - Ports are used to distinguish different communication endpoints (such as different devices, services, or clients)
+    - Each port maintains its own collection of sessions, allowing session IDs from different ports to be managed independently
+    - The port mechanism enables the system to establish sessions with multiple endpoints simultaneously without confusing session states
+
+2. **One-to-Many Communication Scenarios**:
+
+    - When an application needs to communicate with multiple devices simultaneously, it can create a port for each device
+    - Each port can independently manage sessions with the corresponding device, using its own session ID space
+    - Example: A control center connecting to multiple smart home devices, each device using an independent port
+
+3. **Many-to-Many Communication Scenarios**:
+
+    - In complex systems, multiple services need to communicate with multiple clients
+    - The port mechanism allows the system to create independent session management spaces for each communication relationship
+    - Example: In a microservice architecture, Service A needs to communicate simultaneously with Services B, C, and D
+
+Example below:
+
+### Socket Server Example
+
+Here's a simple example of a Socket server using PSession, showing how to manage sessions for multiple clients:
+
+```typescript
+import { SessionManager } from "psession";
+import * as net from "net";
+
+// Create session manager
+const manager = new SessionManager({
+    sender: (message) => {
+        // Send message to client
+        const client = message.client;
+        if (client && !client.destroyed) {
+            client.write(JSON.stringify(message));
+        }
+    },
+    sessionTimeout: 10000, // 10 seconds timeout
+});
+
+// Create TCP server
+const server = net.createServer((client) => {
+    console.log("Client connected", client.remoteAddress);
+
+    // Create a port for each client
+    const portName = `client_${client.remoteAddress}:${client.remotePort}`;
+    const port = manager.createPort(portName, {
+        sender: (message) => {
+            // Send message to specific client
+            if (!client.destroyed) {
+                client.write(JSON.stringify(message));
+            }
+        },
+    });
+
+    // Handle client messages
+    client.on("data", (data) => {
+        try {
+            const message = JSON.parse(data.toString());
+            message.client = client; // Attach client reference
+
+            // If it's a session message, pass it to the session manager
+            if (manager.isSession(message)) {
+                const session = manager.getSession(message, portName);
+                if (session) {
+                    session.next(message);
+                }
+            } else {
+                // Handle non-session messages
+                console.log("Received regular message:", message);
+            }
+        } catch (error) {
+            console.error("Message parsing error:", error);
+        }
+    });
+
+    // Clean up resources when client disconnects
+    client.on("end", () => {
+        console.log("Client disconnected", client.remoteAddress);
+        port.destroy();
+    });
+});
+
+// Start server
+server.listen(3000, () => {
+    console.log("Server started, listening on port 3000");
+});
+
+// Example: Handle client commands
+manager.on("session:create", (session) => {
+    console.log("New session created:", session.id);
+
+    // Set session handler function
+    session.on("next", async (message) => {
+        console.log("Received session message:", message);
+
+        // Simulate command processing
+        if (message.command === "getTime") {
+            await session.send({
+                status: "success",
+                time: new Date().toISOString(),
+            });
+        }
+    });
+});
+```
+
+This example demonstrates how to:
+
+1. Create an independent port for each connected client
+2. Use the session manager to handle client messages
+3. Implement basic command processing logic
+4. Manage session lifecycle and resource cleanup
+
+## Error Handling
+
+`PSession` provides several error types to help handle different exception situations:
+
+-   `SessionTimeoutError`: Session timeout error
+-   `SessionCancelError`: Session cancelled error
+-   `SessionInvalidError`: Invalid session error
+-   `SessionAbortError`: Session aborted error
+
+```typescript
+import {
+    SessionTimeoutError,
+    SessionCancelError,
+    SessionInvalidError,
+    SessionAbortError,
+} from "psession";
+
+try {
+    const response = await session.send({ command: "query" });
+} catch (error) {
+    if (error instanceof SessionTimeoutError) {
+        console.error("Session timeout");
+    } else if (error instanceof SessionCancelError) {
+        console.error("Session cancelled");
+    } else if (error instanceof SessionInvalidError) {
+        console.error("Invalid session");
+    } else if (error instanceof SessionAbortError) {
+        console.error("Session aborted");
+    } else {
+        console.error("Unknown error:", error);
+    }
+}
+```
+
+## Notes
+
+1. Always call the `session.end()` method to release resources after using a session
+2. Set appropriate `sessionTimeout` and `sessionMaxLife` parameters to avoid resource waste
+3. When handling received messages, ensure correct calling of the `session.next(message)` method
+
+## License
+
+`MIT`
+
+[Open Source Recommendations](https://zhangfisher.github.io/repos/)
