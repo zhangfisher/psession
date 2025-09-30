@@ -20,236 +20,210 @@ pnpm add psession
 bun add psession
 ```
 
+## 工作原理
+
+`Psession`是目的了帮助位于远程网络上的两端进行点对点异步通信时，建立`请求/响应`通信提供封装。
+
+即向远程对象发送一条异步消息，并等待对方的响应，确保在本地与远程建立端到端的`请求/响应`通信。
+
+**基本原理如下：**
+
+1. 在`Local`创建一个`SessionManager`管理器,负责会话的跟踪和管理.
+2. 创建一个`Session`对象，由于本地的`SessionManager`自动分配一个`sid`.
+3. 然后当`session.send(message)`向`Remote`发送一条消息。`session.send`方法会自动在消息体中增加会话标识（即`sid`）。
+
+```ts
+messsage = {
+    type: "get",
+    payload: 1,
+};
+
+session.send(message);
+// 实际发送的中{type:'get',payload:1,sid:<会话id>}
+```
+
+3. `Remote`接收到该消息后，在进行响应时，需要**原样返回该会话 id**。这样，在本地就可以跟据此`sid`来给发送者响应。
+
 ## 快速入门
 
-以下是一个使用 `WebSocket` 实现的服务器和客户端示例，展示如何使用 `PSession` 进行会话管理：
+为了帮助快速了解`Psession`的使用，假设有`Local`和`Remote`两个对象，两者位于不同的电脑，双方通过`TCP/UDP/WebSocket`等，或者浏览器中与`worker`进行通信，并且在接收到到消息会调用`onMessage` 方法。如下：
 
-### WebSocket 服务器端
+### 环境准备
 
-```typescript
+下面以在浏览器端中，页面与`worker`进行`请求/响应`通信为例、
+
+```ts
+// main.js
+const worker = new Worker("./worker.js");
+
+class Local {
+    constructor() {
+        worker.onmessage = this.onMessage.bind(this);
+    }
+    onMessage(message) {
+        // 接收来至worker的方法
+    }
+}
+
+// worker.js
+class Remote {
+    constructor() {
+        self.onmessage = this.onMessage.bind(this);
+    }
+    onMessage(message) {
+        // 接收来自页面的消息
+    }
+}
+```
+
+现在我们需用利用`PSession`来实现`Local`向`Remote`发送端到端的消息并得到正确响应。
+
+###第 1 步: 创建`SessionManager`
+
+在发送端需要创建`SessionManager`，负责管理和跟踪每一次会话。
+
+```ts
+// main.ts
 import { SessionManager } from "psession";
-import { WebSocketServer } from "ws";
 
-// 创建WebSocket服务器
-const wss = new WebSocketServer({ port: 8080 });
+const worker = new Worker("./worker.js");
 
-// 创建会话管理器
-const manager = new SessionManager({
-    sessionTimeout: 10000,
-});
-
-// 处理新的WebSocket连接
-wss.on("connection", (ws, req) => {
-    const clientId = req.socket.remoteAddress + ":" + req.socket.remotePort;
-    // 为每个客户端创建一个独立的端口
-    const port = manager.createPort(clientId, {
+class Local {
+    // 创建会话管理器
+    sessionManager = new SessionManager({
+        // 需要配置一个发送函数，用来向远程发送消息
         sender: (message) => {
-            // 发送消息到特定客户端
-            if (ws.readyState === ws.OPEN) {
-                ws.send(JSON.stringify(message));
-            }
+            worker.postMessage(message);
         },
     });
-
-    // 处理来自客户端的消息
-    ws.on("message", (data) => {
-        try {
-            const message = JSON.parse(data.toString());
-
-            // 判断是否是会话消息
-            if (manager.isSession(message)) {
-                const session = manager.getSession(message, clientId);
-                if (session) {
-                    // 将消息传递给对应的会话
-                    session.next(message);
-                }
-            } else {
-                // 处理非会话消息
-                // 示例：处理客户端请求，创建新会话
-                if (message.type === "command") {
-                    // 创建新会话处理命令
-                    const session = manager.createSession(clientId);
-
-                    // 发送会话消息并等待响应
-                    session
-                        .send({
-                            type: "response",
-                            command: message.command,
-                            status: "processing",
-                        })
-                        .then(() => {
-                            // 模拟处理命令
-                            setTimeout(() => {
-                                session.send({
-                                    type: "response",
-                                    command: message.command,
-                                    status: "completed",
-                                    result: `命令 "${message.command}" 已执行完成`,
-                                });
-
-                                // 结束会话
-                                session.end();
-                            }, 1000);
-                        });
-                }
-            }
-        } catch (error) {
-            console.error("消息解析错误:", error);
-        }
-    });
-
-    // 处理连接关闭
-    ws.on("close", () => {
-        console.log(`客户端已断开: ${clientId}`);
-        // 销毁该客户端的所有会话
-        port.destroy();
-    });
-});
-
-// 监听会话创建事件
-manager.on("session:create", (session) => {
-    console.log(`新会话已创建: ${session.id} (端口: ${session.port})`);
-});
-```
-
-### WebSocket 客户端端
-
-```typescript
-import { SessionManager } from "psession";
-import WebSocket from "ws";
-
-// 创建WebSocket客户端
-const ws = new WebSocket("ws://localhost:8080");
-
-// 创建会话管理器
-const manager = new SessionManager({
-    sender: (message) => {
-        // 发送消息到服务器
-        if (ws.readyState === ws.OPEN) {
-            ws.send(JSON.stringify(message));
-        } else {
-            console.error("WebSocket未连接，无法发送消息");
-        }
-    },
-    sessionTimeout: 5000, // 5秒超时
-});
-
-// 连接成功时的处理
-ws.on("open", () => {
-    console.log("已连接到服务器");
-
-    // 发送普通命令消息
-    ws.send(
-        JSON.stringify({
-            type: "command",
-            command: "getStatus",
-        })
-    );
-
-    // 创建会话并发送消息
-    const session = manager.createSession("default");
-
-    // 使用会话发送消息并等待响应
-    session
-        .send({
-            type: "query",
-            query: "getDeviceList",
-        })
-        .then((response) => {
-            console.log("收到会话响应:", response);
-
-            // 在同一会话中继续发送消息
-            return session.send({
-                type: "query",
-                query: "getDeviceDetails",
-                deviceId: response.devices[0].id,
-            });
-        })
-        .then((details) => {
-            console.log("收到设备详情:", details);
-
-            // 结束会话
-            session.end();
-        })
-        .catch((error) => {
-            console.error("会话错误:", error);
-            session.end();
-        });
-});
-
-// 处理服务器消息
-ws.on("message", (data) => {
-    try {
-        const message = JSON.parse(data.toString());
-
-        // 判断是否是会话消息
-        if (manager.isSession(message)) {
-            const session = manager.getSession(message);
-            if (session) {
-                // 将消息传递给对应的会话
-                session.next(message);
-            }
-        } else {
-            // 处理非会话消息
-            console.log("收到服务器普通消息:", message);
-        }
-    } catch (error) {
-        console.error("消息解析错误:", error);
+    constructor() {
+        worker.onmessage = this.onMessage.bind(this);
     }
-});
-
-// 处理连接关闭
-ws.on("close", () => {
-    console.log("与服务器的连接已关闭");
-});
-
-// 处理错误
-ws.on("error", (error) => {
-    console.error("WebSocket错误:", error);
-});
+    onMessage(message) {
+        // 接收来至worker的方法
+    }
+}
 ```
+
+### 第 2 步: 创建`Session`并发送消息
+
+接下来，`Local`创建会话对象并向`Remote`发送消息。
+
+```ts
+// main.ts
+import { SessionManager } from "psession";
+
+const worker = new Worker("./worker.js");
+
+class Local {
+    // 创建会话管理器
+    sessionManager = new SessionManager({
+        // 需要配置一个发送函数，用来向远程发送消息
+        sender: (message) => {
+            worker.postMessage(message);
+        },
+    });
+    constructor() {
+        worker.onmessage = this.onMessage.bind(this);
+    }
+    onMessage(message) {
+        // 接收来至worker的方法
+    }
+    // 向远程发送消息
+    send(message) {
+        const session = this.sessionManager.createSession({ once: true });
+        // session.send内部会调用上述配置的sender通过worker.postMessage将消息发送出去
+
+        return session.send(message);
+    }
+}
+
+const local = new Local();
+// send返回的是一个Promise，因为需要等待响应
+// 向远程发送并等待响应
+const result = await local.send({ type: "request", value: 1 });
+```
+
+-   `this.sessionManager.createSession`会创建一个`Session`实例并保存，直到会话结束。
+-   以`{ once: true }`参数用于标识该会话是一次性的，在会话响应或结束时会自动销毁。
+-   `session.send`返回一个`Promise`，直至会话得到响应/超时/中止/取消等时被`resolve`或`reject`。
+
+### 第 3 步: 接收端响应
+
+当`Remote`接收到来自`Local`的消息时，需要进行识别并响应。
+
+```ts
+// worker.ts
+class Remote {
+    constructor() {
+        self.onmessage = this.onMessage.bind(this);
+    }
+    onMessage(message) {
+        // 如果消息体中sid>0，则说明这是一条会话消息
+        if (message.sid && message.sid > 0) {
+            // ...处理消息
+            self.postMessage({
+                type: "response",
+                payload: 100,
+                // 重点：需要原路返回此sid值，这样Local才可以识别
+                sid: message.sid,
+            });
+        }
+    }
+}
+```
+
+### 第 4 步: 处理响应消息
+
+在`第2步`中,`await local.send(....)`发送语句处于堵塞状态`pending`，正在等待对方`Remote`的响应。
+
+当`Local`端接收来自`Remote`的消息进行识别，如下：
+
+```ts
+// main.ts
+import { SessionManager } from "psession";
+
+const worker = new Worker("./worker.js");
+
+class Local {
+    sessionManager = new SessionManager(...);
+    onMessage(message) {
+        // 判断接收到的是否是会话消息
+        // 事实上仅仅是判断消息体中是否有sid且sid>0
+        if(this.sessionManager.isSession(message)){
+            // 如果是，则获取会话实例，即Session实例
+            const session = this.sessionManager.getSession()
+            // 如果会话实例存在，
+            if(session){
+                // 会话响应，即上述的await send()被resolve
+                session.next(message)
+            }else{
+                // 会话实例可能已经因超时等原因被销毁了
+            }
+        }
+    }
+    ...
+}
+```
+
+### 第 5 步: 得到响应结果
+
+由于`session.resolve`，所以`await send(...)`就可以返回结果。
+
+```ts
+const local = new Local();
+// send返回的是一个Promise，因为需要等待响应
+// 向远程发送并等待响应
+const result = await local.send({ type: "request", value: 1 });
+console.log(result);
+// { type: "response",payload: 100, sid: 1}
+```
+
+### 小结
+
+以上我们仅在`Local`创建`SessionManager`，如果`Remote`也需要向`Local`发送消息并得到响应，只需要同样创建`SessionManager`并按相同逻辑处理即可。
 
 ## 指南
-
-### 会话原理
-
-`PSession`的核心是基于会话 ID（`sid`）的会话管理机制，它通过在消息中嵌入唯一的会话标识符来跟踪和管理多个并发会话。
-
-1. **SID 的生成与分配**：
-
-    - 每个新会话被创建时，系统会自动分配一个唯一的数字`ID`
-    - `SID` 从 `1` 开始递增，直到达到配置的最大会话数（默认`65535`）
-    - 当 `SID` 用尽时，系统会根据配置的策略回收最早的会话 ID
-
-2. **消息标记机制**：
-
-    - 发送消息时，系统自动在消息对象中添加会话 `SID` 字段（默认字段名为 `sid`）
-    - 接收方通过检查消息中的`SID`字段来识别和路由消息到对应的会话处理器
-    - 这种机制使得多个会话的消息可以在同一通道中传输而不会混淆
-
-3. **会话生命周期管理**：
-    - 会话创建：通过 `createSession()` 方法创建新会话
-    - 会话活跃：每次发送消息时更新会话的最后活动时间
-    - 会话结束：通过 `session.end()` 方法主动结束会话，或等待系统自动清理超时会话
-
-**SID 配置**
-
-```typescript
-// 自定义会话 ID 字段名
-const manager = new SessionManager({
-    sender: (message) => {
-        /* 发送逻辑 */
-    },
-    sessionIdName: "sessionId", // 将默认的 'sid' 改为 'sessionId'
-    maxSessionCount: 1000, // 设置最大会话数为 1000（默认 65535）
-    // 自定义会话溢出处理策略
-    onSessionOverflow: (port) => {
-        // 返回要回收的会话 ID
-        // 默认返回 1，即回收最早创建的会话
-        return 1;
-    },
-});
-```
 
 ### 创建会话管理器
 
