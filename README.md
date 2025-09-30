@@ -15,7 +15,12 @@
 
 ## Installation
 
-````
+```bash
+npm install psession
+yarn add psession
+pnpm add psession
+bun add psession
+```
 
 ## Guide
 
@@ -40,7 +45,7 @@ The core of `PSession` is a session management mechanism based on session IDs (`
     - Session activity: Update the session's last activity time each time a message is sent
     - Session termination: Actively end the session via the `session.end()` method, or wait for the system to automatically clean up timed-out sessions
 
-**SID Configuration**
+`SID` Configuration:
 
 ```typescript
 // Customize session ID field name
@@ -57,7 +62,7 @@ const manager = new SessionManager({
         return 1;
     },
 });
-````
+```
 
 ### Creating a Session Manager
 
@@ -411,7 +416,7 @@ const manager = new SessionManager({
         return 1;
     },
 });
-````
+```
 
 ### Creating a Session Manager
 
@@ -852,7 +857,7 @@ const manager = new SessionManager({
         return 1;
     },
 });
-````
+```
 
 ### Creating a Session Manager
 
