@@ -20,6 +20,204 @@ pnpm add psession
 bun add psession
 ```
 
+## 快速入门 - WebSocket 示例
+
+以下是一个使用 WebSocket 实现的服务器和客户端示例，展示如何使用 PSession 进行会话管理：
+
+### WebSocket 服务器端
+
+```typescript
+import { SessionManager } from "psession";
+import { WebSocketServer } from "ws";
+
+// 创建WebSocket服务器
+const wss = new WebSocketServer({ port: 8080 });
+console.log("WebSocket服务器已启动，监听端口 8080");
+
+// 创建会话管理器
+const manager = new SessionManager({
+    sender: (message) => {
+        // 这个函数不会被直接使用，因为我们会为每个客户端创建独立的端口
+        console.log("默认发送器不应被调用");
+    },
+    sessionTimeout: 10000, // 10秒超时
+});
+
+// 处理新的WebSocket连接
+wss.on("connection", (ws, req) => {
+    const clientId = req.socket.remoteAddress + ":" + req.socket.remotePort;
+    console.log(`客户端已连接: ${clientId}`);
+
+    // 为每个客户端创建一个独立的端口
+    const port = manager.createPort(clientId, {
+        sender: (message) => {
+            // 发送消息到特定客户端
+            if (ws.readyState === ws.OPEN) {
+                ws.send(JSON.stringify(message));
+            }
+        },
+    });
+
+    // 处理来自客户端的消息
+    ws.on("message", (data) => {
+        try {
+            const message = JSON.parse(data.toString());
+
+            // 判断是否是会话消息
+            if (manager.isSession(message)) {
+                const session = manager.getSession(message, clientId);
+                if (session) {
+                    // 将消息传递给对应的会话
+                    session.next(message);
+                }
+            } else {
+                // 处理非会话消息
+                console.log(`收到来自 ${clientId} 的普通消息:`, message);
+
+                // 示例：处理客户端请求，创建新会话
+                if (message.type === "command") {
+                    // 创建新会话处理命令
+                    const session = manager.createSession(clientId);
+
+                    // 发送会话消息并等待响应
+                    session
+                        .send({
+                            type: "response",
+                            command: message.command,
+                            status: "processing",
+                        })
+                        .then(() => {
+                            // 模拟处理命令
+                            setTimeout(() => {
+                                session.send({
+                                    type: "response",
+                                    command: message.command,
+                                    status: "completed",
+                                    result: `命令 "${message.command}" 已执行完成`,
+                                });
+
+                                // 结束会话
+                                session.end();
+                            }, 1000);
+                        });
+                }
+            }
+        } catch (error) {
+            console.error("消息解析错误:", error);
+        }
+    });
+
+    // 处理连接关闭
+    ws.on("close", () => {
+        console.log(`客户端已断开: ${clientId}`);
+        // 销毁该客户端的所有会话
+        port.destroy();
+    });
+});
+
+// 监听会话创建事件
+manager.on("session:create", (session) => {
+    console.log(`新会话已创建: ${session.id} (端口: ${session.port})`);
+});
+```
+
+### WebSocket 客户端端
+
+```typescript
+import { SessionManager } from "psession";
+import WebSocket from "ws";
+
+// 创建WebSocket客户端
+const ws = new WebSocket("ws://localhost:8080");
+
+// 创建会话管理器
+const manager = new SessionManager({
+    sender: (message) => {
+        // 发送消息到服务器
+        if (ws.readyState === ws.OPEN) {
+            ws.send(JSON.stringify(message));
+        } else {
+            console.error("WebSocket未连接，无法发送消息");
+        }
+    },
+    sessionTimeout: 5000, // 5秒超时
+});
+
+// 连接成功时的处理
+ws.on("open", () => {
+    console.log("已连接到服务器");
+
+    // 发送普通命令消息
+    ws.send(
+        JSON.stringify({
+            type: "command",
+            command: "getStatus",
+        })
+    );
+
+    // 创建会话并发送消息
+    const session = manager.createSession("default");
+
+    // 使用会话发送消息并等待响应
+    session
+        .send({
+            type: "query",
+            query: "getDeviceList",
+        })
+        .then((response) => {
+            console.log("收到会话响应:", response);
+
+            // 在同一会话中继续发送消息
+            return session.send({
+                type: "query",
+                query: "getDeviceDetails",
+                deviceId: response.devices[0].id,
+            });
+        })
+        .then((details) => {
+            console.log("收到设备详情:", details);
+
+            // 结束会话
+            session.end();
+        })
+        .catch((error) => {
+            console.error("会话错误:", error);
+            session.end();
+        });
+});
+
+// 处理服务器消息
+ws.on("message", (data) => {
+    try {
+        const message = JSON.parse(data.toString());
+
+        // 判断是否是会话消息
+        if (manager.isSession(message)) {
+            const session = manager.getSession(message);
+            if (session) {
+                // 将消息传递给对应的会话
+                session.next(message);
+            }
+        } else {
+            // 处理非会话消息
+            console.log("收到服务器普通消息:", message);
+        }
+    } catch (error) {
+        console.error("消息解析错误:", error);
+    }
+});
+
+// 处理连接关闭
+ws.on("close", () => {
+    console.log("与服务器的连接已关闭");
+});
+
+// 处理错误
+ws.on("error", (error) => {
+    console.error("WebSocket错误:", error);
+});
+```
+
 ## 指南
 
 ### 会话原理
