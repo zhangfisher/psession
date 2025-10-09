@@ -1,5 +1,11 @@
 # psession
 
+## 1.1.0
+
+### Minor Changes
+
+- eb6e927: add port feature
+
 ## 1.0.1
 
 ### Patch Changes
