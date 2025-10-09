@@ -78,7 +78,7 @@ class Remote {
 
 现在我们需用利用`PSession`来实现`Local`向`Remote`发送端到端的消息并得到正确响应。
 
-###第 1 步: 创建`SessionManager`
+### 第 1 步: 创建`SessionManager`
 
 在发送端需要创建`SessionManager`，负责管理和跟踪每一次会话。
 
@@ -196,7 +196,7 @@ class Local {
             // 如果会话实例存在，
             if(session){
                 // 会话响应，即上述的await send()被resolve
-                session.next(message)
+                session.resolve(message)
             }else{
                 // 会话实例可能已经因超时等原因被销毁了
             }
@@ -208,7 +208,7 @@ class Local {
 
 ### 第 5 步: 得到响应结果
 
-由于`session.resolve`，所以`await send(...)`就可以返回结果。
+当发送方识别到了接收到的响应时调用`session.resolve`，所以`await send(...)`就可以返回结果。
 
 ```ts
 const local = new Local();
@@ -226,6 +226,8 @@ console.log(result);
 ## 指南
 
 ### 创建会话管理器
+
+会话管理器负责管理所有的会话对象。
 
 ```typescript
 import { SessionManager } from "psession";
@@ -246,7 +248,11 @@ const manager = new SessionManager({
 });
 ```
 
-### 创建和使用会话
+-   `SessionManager`的重点在于需要提供一个`sender`函数，用来发送消息给远端。
+
+### 创建会话
+
+当发送消息给远端并需要得到响应时，需要会创建一个`Session`实例，调用`await session.send`发送会话消息并等待响应。
 
 ```typescript
 // 创建一个会话
@@ -272,9 +278,12 @@ try {
 }
 ```
 
-### 处理会话消息
+-   创建的`Session`可以多次重复使用。
+-   `await session.send(message)`会等待对方的响应并直到超时触发`SessionTimeoutError`。
 
-**重点**：当从远端接收到消息时，需要通过`manager.isSession(message)`判断是否是会话消息，如果是，则通过`manager.getSession(message, message.from)`获取对应的会话，然后调用`session.next(message)`将消息传递给会话处理函数。
+### 分发会话消息
+
+执行`session.send`后端会处于等待远程响应的阶段，期间可能会从远端`Remote`接收到很多消息，需要通过`manager.isSession(message)`识别是否是会话消息，如果是，则通过`manager.getSession(message)`找到对应的会话实例，然后调用`session.resolve(message)`将消息传递给会话处理函数，从而导致`await session.send(message)`的`resolve`
 
 ```typescript
 // 在消息接收处理函数中
@@ -282,10 +291,10 @@ function onMessage(message) {
     // 判断是否是会话消息
     if (manager.isSession(message)) {
         // 获取对应的会话
-        const session = manager.getSession(message, message.from);
+        const session = manager.getSession(message);
         if (session) {
             // 将消息传递给会话处理
-            session.next(message);
+            session.resolve(message);
         }
     } else {
         // 处理非会话消息
@@ -293,6 +302,33 @@ function onMessage(message) {
     }
 }
 ```
+
+**要点:**
+
+-   使用`await session.send`发送会话消息
+-   在接收到消息时通过`manager.isSession`识别接收到的是否是一条会话消息。
+-   如果是，则找到相应的`session`实例，并调用`session.resolve`即可。
+-   由于发送端可能创建多个会话，所以上述代码的作用就是将消息分发给对应的`Session`实例。
+
+### 响应会话消息
+
+`session.send(message)`发送消息会，会在消息中自动添加一个`会话ID（即sid）`，例如：
+
+```ts
+const response = await session.send({ type: "open", payload: 1 });
+// 发送时自动添加sid
+// {sid:123, type:'open',payload:1}
+```
+
+`sid`是由会话管理器自动添加和维护的。并且`sid`的字段名称也是可以通过`sessionIdName`配置的。
+
+当远程通信接收方接收到此会话消息时，在进行回复时，需要在响应消息中携带此`sid`值即可。
+发送方在处理响应消息时调用的`isSession`本质上就是判断接收的响应消息中是否具有`sid`，如果有则说明是`Session`会话消息.
+然后调用`getSession`时，就是响应消息中的`sid`值在会话管理器中找到对应的会话实例。
+
+了解了以上基本逻辑后，响应会话的逻辑就很简单了，就是**原路返回该 sid 值即可**。
+
+远程接收方不需要也使用`PSession`，**只需要在响应消息中携带同样的`sid`值即可。**
 
 ### 重试机制
 
@@ -364,16 +400,23 @@ try {
 -   系统会定期检查所有会话（默认每 `sessionTimeout/2` 时间检查一次）
 -   如果发现会话的最后活动时间超过 `sessionMaxLife`，会自动结束并清理该会话
 -   当使用重试机制时，超时检测会暂停，直到所有重试完成
+-   `Session`实例创建后可以重复使用，即多次调用`send`方法，每次调用`send`方法均启用启动`SessionTimeout`，即`sessionTimeout`是每次调用并等待响应的超时时间。
+-   `sessionMaxLife`则是整个`Session`实例的生命周期时间,从最后一次调用`send`开始计算，超过`sessionMaxLife`则会话实例被销毁。如同浏览器的会话超时时间(默认是 `20` 分钟无活作)。
 
-### Port
+### 多路会话
 
-在`PSession`中，`Port`（端口）是一个重要概念，特别适用于一对多、多对多通信场景：
+`Psession`也可以用在一对多、多对多通信场景中，如开发`TCP Server`时，需要与多个客户端进行点对点通信。
+
+会话发生在端到端场景中，会话管理时需要识别不同的远程通信对象。
+
+为此，在`PSession`中引入了`Port`概念：
 
 1. **端口的作用**：
 
     - 端口用于区分不同的通信对端（如不同的设备、服务或客户端）
-    - 每个端口维护自己的会话集合，使得不同端口的会话 ID 可以独立管理
+    - 每个端口维护自己的会话集合，使得不同端口的`会话ID`可以独立管理
     - 端口机制使系统能够同时与多个对端建立会话，而不会混淆会话状态
+    - 不同`Port`的会话 ID 是可能重复的。
 
 2. **一对多通信场景**：
 
@@ -387,13 +430,10 @@ try {
     - 端口机制允许系统为每对通信关系创建独立的会话管理空间
     - 例如：微服务架构中，服务 A 需要同时与服务 B、C、D 通信
 
-示例如下：
-
-### Socket 服务器示例
-
-以下是一个简单的 Socket 服务器使用 PSession 的示例，展示了如何管理多个客户端的会话：
+以下是一个简单的 `Socket` 服务器使用 `PSession` 的示例，展示了如何管理多个客户端的会话：
 
 ```typescript
+// server.ts
 import { SessionManager } from "psession";
 import * as net from "net";
 
@@ -413,7 +453,7 @@ const manager = new SessionManager({
 const server = net.createServer((client) => {
     console.log("客户端已连接", client.remoteAddress);
 
-    // 为每个客户端创建一个端口
+    // 为每个客户端创建一个端口，为端口取一个唯一的标识
     const portName = `client_${client.remoteAddress}:${client.remotePort}`;
     const port = manager.createPort(portName, {
         sender: (message) => {
@@ -432,9 +472,10 @@ const server = net.createServer((client) => {
 
             // 如果是会话消息，交给会话管理器处理
             if (manager.isSession(message)) {
+                // 需要传入第2个参数: 端口名称
                 const session = manager.getSession(message, portName);
                 if (session) {
-                    session.next(message);
+                    session.resolve(message);
                 }
             } else {
                 // 处理非会话消息
@@ -456,32 +497,9 @@ const server = net.createServer((client) => {
 server.listen(3000, () => {
     console.log("服务器已启动，监听端口 3000");
 });
-
-// 示例：处理客户端命令
-manager.on("session:create", (session) => {
-    console.log("新会话创建:", session.id);
-
-    // 设置会话处理函数
-    session.on("next", async (message) => {
-        console.log("收到会话消息:", message);
-
-        // 模拟处理命令
-        if (message.command === "getTime") {
-            await session.send({
-                status: "success",
-                time: new Date().toISOString(),
-            });
-        }
-    });
-});
 ```
 
-这个示例展示了如何：
-
-1. 为每个连接的客户端创建一个独立的端口
-2. 使用会话管理器处理客户端消息
-3. 实现基本的命令处理逻辑
-4. 管理会话生命周期和资源清理
+客户端的使用与上面一致，只需要发送会话消息即可。
 
 ## 错误处理
 
@@ -521,7 +539,7 @@ try {
 
 1. 会话使用完毕后务必调用 `session.end()` 方法释放资源
 2. 合理设置 `sessionTimeout` 和 `sessionMaxLife` 参数，避免资源浪费
-3. 处理接收到的消息时，确保正确调用 `session.next(message)` 方法
+3. 处理接收到的消息时，确保正确调用 `session.resolve(message)` 方法
 
 ## 许可证
 

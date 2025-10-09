@@ -325,7 +325,7 @@ export class Session<Message extends ISessionMessage> {
 	 *
 	 * @param message
 	 */
-	next(message: Message): void {
+	resolve(message: Message): void {
 		this._assertReady();
 		if (this._resolve) {
 			this._resolve(message);

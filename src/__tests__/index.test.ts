@@ -27,7 +27,7 @@ function createPeer(id: string, peerId: string) {
 			if (sessionManager.isSession(data)) {
 				const session = sessionManager.getSession(data);
 				if (session) {
-					session?.next(data);
+					session?.resolve(data);
 				} else {
 					node.send(peerId, { sid: data.sid, type: "response", value: data.value + 1 });
 				}
@@ -357,7 +357,7 @@ describe("Session", () => {
 					const session = serverSessionManager.getSession(data, data.from);
 					if (session) {
 						// 将消息传递给对应的会话
-						session.next(data);
+						session.resolve(data);
 					} else {
 						// 如果没有找到会话，则直接回复
 						serverNode.send(data.from, {
@@ -401,7 +401,7 @@ describe("Session", () => {
 							const session = clientSessionManager.getSession(data);
 							if (session) {
 								// 将消息传递给对应的会话
-								session.next(data);
+								session.resolve(data);
 							}
 						}
 					},
@@ -478,7 +478,7 @@ describe("Session", () => {
 					const session = serverSessionManager.getSession(data, data.from);
 					if (session) {
 						// 将消息传递给对应的会话
-						session.next(data);
+						session.resolve(data);
 					}
 				}
 			},
@@ -517,7 +517,7 @@ describe("Session", () => {
 							const session = clientSessionManager.getSession(data);
 							if (session) {
 								// 将消息传递给对应的会话
-								session.next(data);
+								session.resolve(data);
 							} else {
 								clientResponses.get(clientId)?.push(data.value);
 								// 回复服务器，值加1
